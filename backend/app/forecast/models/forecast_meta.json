@@ -1,0 +1,22 @@
+{
+  "training_days": 40,
+  "test_days": 10,
+  "train_samples": 3840,
+  "test_samples": 960,
+  "features": [
+    "slot",
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "cloud_cover",
+    "temperature_c"
+  ],
+  "metrics": {
+    "solar_mae_kw": 0.054,
+    "solar_rmse_kw": 0.095,
+    "load_mae_kw": 0.044,
+    "load_rmse_kw": 0.057,
+    "split": "80% train / 20% held-out test split (simulated data)",
+    "description": "Computed on 20% held-out simulated test split"
+  }
+}

@@ -1,0 +1,5 @@
+-r requirements.txt
+ortools>=9.9.3963
+xgboost>=2.0.3
+pandas>=2.2.0
+pytest>=8.0.0

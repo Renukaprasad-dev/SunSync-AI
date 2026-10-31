@@ -196,41 +196,50 @@ export default function ForecastPage() {
 
       {/* Honest Error Metrics Grid */}
       {data && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Solar MAE</span>
-            <div className="flex items-baseline gap-1 text-2xl font-bold text-amber-400">
-              {data.metrics.solar_mae_kw}
-              <span className="text-xs text-slate-400 font-normal">kW</span>
-            </div>
-            <span className="text-[10px] text-slate-500 block">Mean Absolute Error (Solar)</span>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <span className="font-semibold text-slate-300">Model Performance Metrics</span>
+            <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-300 border border-blue-500/20">
+              Computed on 20% held-out simulated test split (960 intervals)
+            </span>
           </div>
 
-          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Solar RMSE</span>
-            <div className="flex items-baseline gap-1 text-2xl font-bold text-amber-400">
-              {data.metrics.solar_rmse_kw}
-              <span className="text-xs text-slate-400 font-normal">kW</span>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Solar MAE</span>
+              <div className="flex items-baseline gap-1 text-2xl font-bold text-amber-400">
+                {data.metrics.solar_mae_kw}
+                <span className="text-xs text-slate-400 font-normal">kW</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">Mean Absolute Error (held-out test)</span>
             </div>
-            <span className="text-[10px] text-slate-500 block">Root Mean Square Error</span>
-          </div>
 
-          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Load MAE</span>
-            <div className="flex items-baseline gap-1 text-2xl font-bold text-blue-400">
-              {data.metrics.load_mae_kw}
-              <span className="text-xs text-slate-400 font-normal">kW</span>
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Solar RMSE</span>
+              <div className="flex items-baseline gap-1 text-2xl font-bold text-amber-400">
+                {data.metrics.solar_rmse_kw}
+                <span className="text-xs text-slate-400 font-normal">kW</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">Root Mean Square Error (held-out test)</span>
             </div>
-            <span className="text-[10px] text-slate-500 block">Factory Base Load Accuracy</span>
-          </div>
 
-          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Load RMSE</span>
-            <div className="flex items-baseline gap-1 text-2xl font-bold text-blue-400">
-              {data.metrics.load_rmse_kw}
-              <span className="text-xs text-slate-400 font-normal">kW</span>
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Load MAE</span>
+              <div className="flex items-baseline gap-1 text-2xl font-bold text-blue-400">
+                {data.metrics.load_mae_kw}
+                <span className="text-xs text-slate-400 font-normal">kW</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">Factory Load Error (held-out test)</span>
             </div>
-            <span className="text-[10px] text-slate-500 block">Root Mean Square Error</span>
+
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Load RMSE</span>
+              <div className="flex items-baseline gap-1 text-2xl font-bold text-blue-400">
+                {data.metrics.load_rmse_kw}
+                <span className="text-xs text-slate-400 font-normal">kW</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">Root Mean Square Error (held-out test)</span>
+            </div>
           </div>
         </div>
       )}

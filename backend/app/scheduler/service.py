@@ -9,8 +9,6 @@ from app.models.domain import (
     Machine
 )
 from app.scheduler.solver_interface import BaseSchedulerSolver
-from app.scheduler.ortools_solver import ORToolsCPSATSolver
-from app.scheduler.scipy_solver import ScipyMILPSolver
 from app.scheduler.verifier import ScheduleVerifier
 from app.scheduler.reason_engine import ReasonEngine
 
@@ -22,9 +20,11 @@ class SchedulerService:
             self.solver = solver
         else:
             try:
+                from app.scheduler.ortools_solver import ORToolsCPSATSolver
                 self.solver = ORToolsCPSATSolver()
-            except Exception as e:
-                logger.warning(f"Failed to load OR-Tools solver ({e}); falling back to SciPy HiGHS.")
+            except (ImportError, Exception) as e:
+                logger.info(f"OR-Tools not available ({e}); using production SciPy HiGHS solver.")
+                from app.scheduler.scipy_solver import ScipyMILPSolver
                 self.solver = ScipyMILPSolver()
 
     def run_optimization(self, req: OptimizationRequest) -> OptimizationResponse:
@@ -140,7 +140,7 @@ class SchedulerService:
                     grid_profile=[0.0] * 96,
                     solar_profile=solar,
                     solar_used_profile=[0.0] * 96,
-                    kpis=base_kpis, # fallback to base
+                    kpis=base_kpis,
                     reasons=[infeasibility_diagnosis],
                     verifier_passed=False,
                     verifier_notes=infeasibility_diagnosis
@@ -158,7 +158,6 @@ class SchedulerService:
                 tariff=tariff
             )
 
-            # Assign reasons back to machine schedule results
             if primary_strat in strategy_results:
                 for m_item in strategy_results[primary_strat].machine_schedules:
                     if m_item.machine_id in machine_reasons:
