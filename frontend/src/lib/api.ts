@@ -1,4 +1,4 @@
-import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate } from "./types";
+import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse } from "./types";
 import { slotToTime } from "./utils";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -216,6 +216,19 @@ export async function fetchWithFallback<T>(url: string, options?: RequestInit, f
     }
     throw err;
   }
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+  return fetchWithFallback<HealthResponse>("/health", undefined, {
+    status: "healthy",
+    service: "SunSync AI",
+    version: "1.0.0",
+    intervals_per_day: 96,
+    interval_minutes: 15,
+    storage_mode: "memory",
+    durable: false,
+    supabase_configured: false
+  });
 }
 
 export async function getSite(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Site> {

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DEFAULT_GRID_EMISSION_FACTOR_KG_PER_KWH: float = 0.8200 # India CEA grid emission factor
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    STORAGE_MODE: str = "" # Optional override: "supabase", "local_file", "memory"
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     model_config = SettingsConfigDict(env_file=".env", extra="allow")

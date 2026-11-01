@@ -26,9 +26,9 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await expect(page.locator("text=Industrial Scheduling Dashboard")).toBeVisible({ timeout: 15000 });
 
     // Verify KPI cards
-    await expect(page.locator("text=Daily Electricity Cost")).toBeVisible();
-    await expect(page.locator("text=Peak Grid Demand")).toBeVisible();
-    await expect(page.locator("text=Solar Consumed On-Site")).toBeVisible();
+    await expect(page.locator("text=Daily Electricity Cost").first()).toBeVisible();
+    await expect(page.locator("text=Peak Grid Demand").first()).toBeVisible();
+    await expect(page.locator("span", { hasText: "Solar Consumed On-Site" }).first()).toBeVisible();
     await expect(page.locator("text=0 Violations")).toBeVisible();
     await expect(page.locator("text=VERIFIED STRICT")).toBeVisible();
 

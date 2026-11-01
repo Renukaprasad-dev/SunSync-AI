@@ -7,6 +7,18 @@ export interface Site {
   currency?: string;
   grid_emission_factor_kg_per_kwh?: number;
   storage_mode?: string;
+  durable?: boolean;
+}
+
+export interface HealthResponse {
+  status: string;
+  service: string;
+  version: string;
+  intervals_per_day: number;
+  interval_minutes: number;
+  storage_mode: string;
+  durable: boolean;
+  supabase_configured: boolean;
 }
 
 export interface SiteUpdate {

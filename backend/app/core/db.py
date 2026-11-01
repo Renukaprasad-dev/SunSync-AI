@@ -1,6 +1,8 @@
 import copy
 import json
 import logging
+import os
+import threading
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -25,11 +27,14 @@ def ensure_uuid(val: str) -> str:
 class DataRepository:
     """Unified repository for SunSync AI data.
     Directly persists to Supabase (PostgreSQL REST API) when SUPABASE_URL and
-    SUPABASE_SERVICE_ROLE_KEY are configured; gracefully falls back to local
-    JSON file store (and in-memory cache) seeded with the demo dataset when not set.
+    SUPABASE_SERVICE_ROLE_KEY are configured; falls back to atomic local JSON
+    store when running locally; runs in non-durable memory mode on serverless (Vercel)
+    when Supabase credentials are not supplied.
     """
 
-    def __init__(self):
+    def __init__(self, storage_mode: Optional[str] = None):
+        self._lock = threading.Lock()
+        self._explicit_mode = storage_mode
         self._sites: Dict[str, Dict[str, Any]] = {}
         self._machines: Dict[str, List[Machine]] = {}
         self._tariffs: Dict[str, Tariff] = {}
@@ -38,7 +43,8 @@ class DataRepository:
         self._optimization_runs: List[Dict[str, Any]] = []
 
         self._seed_demo_data()
-        self._load_local_store()
+        if self.storage_mode == "local_file":
+            self._load_local_store()
 
     @property
     def is_supabase_enabled(self) -> bool:
@@ -46,7 +52,20 @@ class DataRepository:
 
     @property
     def storage_mode(self) -> str:
-        return "supabase" if self.is_supabase_enabled else "local_file"
+        if self._explicit_mode:
+            return self._explicit_mode
+        if settings.STORAGE_MODE:
+            return settings.STORAGE_MODE
+        if self.is_supabase_enabled:
+            return "supabase"
+        # Serverless runtimes have ephemeral / read-only filesystems
+        if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+            return "memory"
+        return "local_file"
+
+    @property
+    def is_durable(self) -> bool:
+        return self.storage_mode in ("supabase", "local_file")
 
     def _get_supabase_headers(self) -> Dict[str, str]:
         return {
@@ -204,18 +223,28 @@ class DataRepository:
                 logger.warning(f"Failed to read local store ({e}); using initial demo seed.")
 
     def _save_local_store(self):
-        """Saves current state to local JSON store."""
-        try:
-            LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
-            serializable = {
-                "sites": self._sites,
-                "machines": {s_id: [m.model_dump() for m in m_list] for s_id, m_list in self._machines.items()},
-                "tariffs": {s_id: t.model_dump() for s_id, t in self._tariffs.items()}
-            }
-            with open(LOCAL_STORE_PATH, "w", encoding="utf-8") as f:
-                json.dump(serializable, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to write local store ({e})")
+        """Saves current state to local JSON store atomically under a process lock.
+        No-op in non-durable memory mode.
+        """
+        if self.storage_mode != "local_file":
+            return
+        with self._lock:
+            try:
+                LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                serializable = {
+                    "sites": self._sites,
+                    "machines": {s_id: [m.model_dump() for m in m_list] for s_id, m_list in self._machines.items()},
+                    "tariffs": {s_id: t.model_dump() for s_id, t in self._tariffs.items()}
+                }
+                tmp_path = LOCAL_STORE_PATH.with_suffix(".tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(serializable, f, indent=2)
+                # Atomic replace on both POSIX and Windows
+                tmp_path.replace(LOCAL_STORE_PATH)
+            except OSError as e:
+                logger.warning(f"Failed to write local store ({e}); filesystem may be read-only.")
+            except Exception as e:
+                logger.warning(f"Unexpected error writing local store ({e})")
 
     # 1. Sites
     def list_sites(self) -> List[Dict[str, Any]]:
@@ -284,8 +313,11 @@ class DataRepository:
                         if data:
                             current = data[0]
                             self._sites[site_id] = current
+                else:
+                    raise RuntimeError(f"Supabase update_site failed ({resp.status_code}): {resp.text}")
             except Exception as e:
-                logger.warning(f"Supabase update_site failed ({e}); saved to local store.")
+                logger.error(f"Supabase update_site failed: {e}")
+                raise
 
         self._save_local_store()
         return current
@@ -349,9 +381,12 @@ class DataRepository:
                 ]
                 upsert_headers = self._get_supabase_headers()
                 upsert_headers["Prefer"] = "resolution=merge-duplicates"
-                httpx.post(url, headers=upsert_headers, json=payload, timeout=3.0)
+                post_resp = httpx.post(url, headers=upsert_headers, json=payload, timeout=3.0)
+                if post_resp.status_code not in (200, 201, 204):
+                    raise RuntimeError(f"Supabase save_machines failed ({post_resp.status_code}): {post_resp.text}")
             except Exception as e:
-                logger.warning(f"Supabase save_machines failed ({e}); saved to local store.")
+                logger.error(f"Supabase save_machines failed: {e}")
+                raise
 
         return clean_machines
 
@@ -397,12 +432,17 @@ class DataRepository:
                 if existing_resp.status_code == 200 and existing_resp.json():
                     t_id = existing_resp.json()[0]["id"]
                     url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/tariffs?id=eq.{t_id}"
-                    httpx.patch(url, headers=headers, json=payload, timeout=3.0)
+                    patch_resp = httpx.patch(url, headers=headers, json=payload, timeout=3.0)
+                    if patch_resp.status_code not in (200, 204):
+                        raise RuntimeError(f"Supabase save_tariff failed ({patch_resp.status_code}): {patch_resp.text}")
                 else:
                     url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/tariffs"
-                    httpx.post(url, headers=headers, json=payload, timeout=3.0)
+                    post_resp = httpx.post(url, headers=headers, json=payload, timeout=3.0)
+                    if post_resp.status_code not in (200, 201, 204):
+                        raise RuntimeError(f"Supabase save_tariff failed ({post_resp.status_code}): {post_resp.text}")
             except Exception as e:
-                logger.warning(f"Supabase save_tariff failed ({e}); saved to local store.")
+                logger.error(f"Supabase save_tariff failed: {e}")
+                raise
 
         return tariff
 

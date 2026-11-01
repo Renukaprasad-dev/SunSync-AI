@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Cpu, Plus, Trash2, Save, RefreshCw, Check, AlertCircle, Database } from "lucide-react";
-import { getSite, updateSite, getMachines, updateMachines, getTariff, updateTariff } from "@/lib/api";
+import { getHealth, getSite, updateSite, getMachines, updateMachines, getTariff, updateTariff } from "@/lib/api";
 import { Site, Machine, Tariff } from "@/lib/types";
 import { slotToTime } from "@/lib/utils";
 import { SimulationDisclaimer } from "@/components/disclaimer";
@@ -12,6 +12,7 @@ export default function SetupPage() {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [tariff, setTariff] = useState<Tariff | null>(null);
   const [pMax, setPMax] = useState<number>(25.0);
+  const [durable, setDurable] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
@@ -21,7 +22,13 @@ export default function SetupPage() {
     async function loadData() {
       setLoading(true);
       try {
-        const [siteObj, mList, tObj] = await Promise.all([getSite(), getMachines(), getTariff()]);
+        const [healthObj, siteObj, mList, tObj] = await Promise.all([
+          getHealth(),
+          getSite(),
+          getMachines(),
+          getTariff()
+        ]);
+        setDurable(healthObj.durable);
         setSite(siteObj);
         setPMax(siteObj.p_max_grid_kw ?? 25.0);
         setMachines(mList);
@@ -139,8 +146,8 @@ export default function SetupPage() {
               Machine Inventory & Tariff Setup
             </h1>
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 border border-slate-700 text-slate-300">
-              <Database className="w-3 h-3 text-emerald-400" />
-              {site?.storage_mode === "supabase" ? "Supabase PostgreSQL" : "Local JSON Store"}
+              <Database className={`w-3 h-3 ${durable ? "text-emerald-400" : "text-amber-400"}`} />
+              {site?.storage_mode === "supabase" ? "Supabase PostgreSQL (Durable)" : durable ? "Local File (Durable)" : "In-Memory (Non-durable)"}
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
@@ -163,10 +170,17 @@ export default function SetupPage() {
             className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-sm"
           >
             {saveSuccess ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-            {saving ? "Saving..." : saveSuccess ? "Saved Successfully!" : "Save Changes"}
+            {saving ? "Saving..." : saveSuccess ? (durable ? "Saved Successfully!" : "Saved (temporary, demo mode)") : "Save Changes"}
           </button>
         </div>
       </div>
+
+      {!durable && (
+        <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+          <span>Demo mode: changes are not permanently saved.</span>
+        </div>
+      )}
 
       {validationError && (
         <div className="p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs flex items-center gap-2">

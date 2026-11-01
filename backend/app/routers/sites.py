@@ -20,6 +20,7 @@ def get_site(site_id: str):
         raise HTTPException(status_code=404, detail=f"Site {site_id} not found")
     result = dict(site)
     result["storage_mode"] = repo.storage_mode
+    result["durable"] = repo.is_durable
     return result
 
 @router.put("/{site_id}", response_model=Dict[str, Any])
@@ -30,6 +31,7 @@ def update_site(site_id: str, update_data: SiteUpdate):
         raise HTTPException(status_code=404, detail=f"Site {site_id} not found")
     result = dict(updated)
     result["storage_mode"] = repo.storage_mode
+    result["durable"] = repo.is_durable
     return result
 
 @router.get("/{site_id}/machines", response_model=List[Machine])

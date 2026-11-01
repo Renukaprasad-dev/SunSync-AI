@@ -43,6 +43,7 @@ def health_check():
         "intervals_per_day": settings.INTERVALS_PER_DAY,
         "interval_minutes": settings.INTERVAL_MINUTES,
         "storage_mode": repo.storage_mode,
+        "durable": repo.is_durable,
         "supabase_configured": repo.is_supabase_enabled
     }
 
