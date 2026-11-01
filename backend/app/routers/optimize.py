@@ -27,7 +27,7 @@ class OptimizeEndpointPayload(BaseModel):
     base_load: Optional[List[float]] = None
 
 @router.post("/optimize", response_model=OptimizationResponse)
-def run_optimization(payload: OptimizeEndpointPayload, request: Optional[Request] = None):
+def run_optimization(payload: OptimizeEndpointPayload, request: Request = None):
     if request:
         rate_limiter.check(f"opt:{get_visitor_session_id(request)}")
     site_id = payload.site_id

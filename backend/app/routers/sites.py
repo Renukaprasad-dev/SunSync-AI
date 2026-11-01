@@ -105,7 +105,7 @@ def get_site_config_endpoint(site_id: str):
     return config
 
 @router.put("/{site_id}/config", response_model=Dict[str, Any])
-def update_site_config_endpoint(site_id: str, payload: SiteConfigPayload, request: Optional[Request] = None):
+def update_site_config_endpoint(site_id: str, payload: SiteConfigPayload, request: Request = None):
     if request:
         rate_limiter.check(f"write:{get_visitor_session_id(request)}")
     errors = validate_full_config(payload)

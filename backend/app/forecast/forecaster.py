@@ -65,16 +65,20 @@ class SolarAndLoadForecaster:
                 "description": "Computed on 20% held-out simulated test split"
             }
 
-        # Load compact models
-        if solar_path.exists():
+        # Load compact models with strict corruption and presence checks
+        if not solar_path.exists():
+            raise FileNotFoundError(f"Actionable Error: Pre-trained solar model not found at {solar_path}. Ensure models are bundled in deployment.")
+        try:
             self.solar_model = CompactTreeModel(solar_path)
-        else:
-            self.solar_model = None
+        except Exception as e:
+            raise RuntimeError(f"Actionable Error: Pre-trained solar model at {solar_path} is corrupted: {e}")
 
-        if load_path.exists():
+        if not load_path.exists():
+            raise FileNotFoundError(f"Actionable Error: Pre-trained load model not found at {load_path}. Ensure models are bundled in deployment.")
+        try:
             self.load_model = CompactTreeModel(load_path)
-        else:
-            self.load_model = None
+        except Exception as e:
+            raise RuntimeError(f"Actionable Error: Pre-trained load model at {load_path} is corrupted: {e}")
 
     def fetch_open_meteo_weather(self, lat: float = 13.03, lon: float = 77.51) -> Optional[Dict[str, List[float]]]:
         """Fetches hourly weather forecast from Open-Meteo for Peenya, Bengaluru."""
