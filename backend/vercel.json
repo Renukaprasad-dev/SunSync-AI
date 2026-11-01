@@ -1,15 +1,15 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "builds": [
     {
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": {
-        "maxDuration": 15,
-        "memory": 1024,
+        "maxDuration": 60,
         "includeFiles": [
-          "app/forecast/models/**",
-          "app/**"
+          "app/**",
+          "app/forecast/models/**"
         ]
       }
     }
@@ -18,6 +18,12 @@
     {
       "src": "/(.*)",
       "dest": "api/index.py"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/internal/cleanup",
+      "schedule": "0 */6 * * *"
     }
   ]
 }

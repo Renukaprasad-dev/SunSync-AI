@@ -1,11 +1,15 @@
 -- Supabase Migration: 002_atomic_config_rpc.sql
 -- Atomic site configuration save with optimistic concurrency control.
+-- Canonical names (post phase-3 cleanup):
+--   Column:   sites.version     (single source of truth; site_version alias removed)
+--   Function: save_site_configuration  (single canonical name; aliases removed)
 
 ALTER TABLE public.sites
     ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
+-- Drop the redundant alias column if it was previously added
 ALTER TABLE public.sites
-    ADD COLUMN IF NOT EXISTS site_version INTEGER DEFAULT 1;
+    DROP COLUMN IF EXISTS site_version;
 
 CREATE OR REPLACE FUNCTION public.save_site_configuration(
     p_site_id UUID,
@@ -96,7 +100,6 @@ BEGIN
            name = COALESCE(p_site_data->>'name', name),
            location = COALESCE(p_site_data->>'location', location),
            version = v_new_version,
-           site_version = v_new_version,
            updated_at = NOW()
      WHERE id = p_site_id;
 
@@ -145,13 +148,13 @@ BEGIN
              WHERE id = v_tariff_id;
         ELSE
             INSERT INTO public.tariffs (
-                site_id,
-                name,
-                demand_charge_rate_per_kw,
-                currency,
-                rates_json,
-                notes,
-                updated_at
+                 site_id,
+                 name,
+                 demand_charge_rate_per_kw,
+                 currency,
+                 rates_json,
+                 notes,
+                 updated_at
             )
             VALUES (
                 p_site_id,
@@ -269,7 +272,7 @@ BEGIN
 END;
 $$;
 
--- Restrict RPC execution to the backend service role.
+-- Restrict RPC execution to the backend service role only.
 REVOKE ALL ON FUNCTION
     public.save_site_configuration(UUID, JSONB, JSONB, JSONB, INTEGER)
     FROM PUBLIC, anon, authenticated;
@@ -278,40 +281,6 @@ GRANT EXECUTE ON FUNCTION
     public.save_site_configuration(UUID, JSONB, JSONB, JSONB, INTEGER)
     TO service_role;
 
--- Canonical aliases for save_site_configuration
-CREATE OR REPLACE FUNCTION public.save_site_configuration_atomic(
-    p_site_id UUID,
-    p_site_data JSONB,
-    p_machines JSONB,
-    p_tariff JSONB,
-    p_expected_version INTEGER DEFAULT NULL
-)
-RETURNS JSONB
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-    SELECT public.save_site_configuration(p_site_id, p_site_data, p_machines, p_tariff, p_expected_version);
-$$;
-
-REVOKE ALL ON FUNCTION public.save_site_configuration_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.save_site_configuration_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) TO service_role;
-
-CREATE OR REPLACE FUNCTION public.save_site_config_atomic(
-    p_site_id UUID,
-    p_site_data JSONB,
-    p_machines JSONB,
-    p_tariff JSONB,
-    p_expected_version INTEGER DEFAULT NULL
-)
-RETURNS JSONB
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-    SELECT public.save_site_configuration(p_site_id, p_site_data, p_machines, p_tariff, p_expected_version);
-$$;
-
-REVOKE ALL ON FUNCTION public.save_site_config_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.save_site_config_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) TO service_role;
-
+-- Drop the previously created aliases (no longer needed; nothing is deployed).
+DROP FUNCTION IF EXISTS public.save_site_configuration_atomic(UUID, JSONB, JSONB, JSONB, INTEGER);
+DROP FUNCTION IF EXISTS public.save_site_config_atomic(UUID, JSONB, JSONB, JSONB, INTEGER);

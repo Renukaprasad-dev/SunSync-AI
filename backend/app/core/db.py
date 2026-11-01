@@ -394,7 +394,7 @@ class DataRepository:
         if self.is_supabase_enabled:
             try:
                 headers = self._get_supabase_headers()
-                rpc_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/rpc/save_site_configuration"
+                rpc_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/rpc/save_site_configuration"  # canonical function name
                 rpc_payload = {
                     "p_site_id": site_id,
                     "p_site_data": site_data,

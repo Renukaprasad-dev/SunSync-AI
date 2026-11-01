@@ -16,7 +16,7 @@ import {
   Printer
 } from "lucide-react";
 
-import { runOptimization, getOptimizationRun } from "@/lib/api";
+import { runOptimization, getOptimizationRun, getSiteConfig } from "@/lib/api";
 import { OptimizationResponse, StrategySchedule } from "@/lib/types";
 import { KPICard, DeadlineViolationsCard } from "@/components/kpi-card";
 import { LoadDispatchChart } from "@/components/charts/load-dispatch-chart";
@@ -51,9 +51,30 @@ export default function DashboardPage() {
     }
   };
 
-  // Cache optimize results per (site_version, scenario) in sessionStorage for instant navigation
+  // Cache optimize results keyed by (site_version, scenario, tariff_hash) in sessionStorage.
+  // Editing the config bumps site.version → new cache key → stale result is never served.
+  const buildCacheKey = (version: number, scenario: string, tariffHash: string) =>
+    `sunsync_opt_v2_${version}_${scenario}_${tariffHash}`;
+
+  const quickTariffHash = (rates: number[]): string => {
+    // XOR-fold the 96 rate values into a short numeric fingerprint.
+    const h = rates.reduce((acc, r, i) => acc ^ ((Math.round(r * 100) + i * 31) & 0xffff), 0);
+    return h.toString(16).padStart(4, "0");
+  };
+
   const fetchOptimization = async (forceRefresh: boolean = false) => {
-    const cacheKey = "sunsync_opt_cache_v1_sunny";
+    // Step 1: fetch current site config to build a version-aware cache key.
+    let cacheKey = "sunsync_opt_v2_unknown";
+    try {
+      const cfg = await getSiteConfig();
+      const version = cfg.version ?? 1;
+      const tariffRates: number[] = cfg.tariff?.rates ?? [];
+      const tariffHash = tariffRates.length === 96 ? quickTariffHash(tariffRates) : "notariff";
+      cacheKey = buildCacheKey(version, "sunny", tariffHash);
+    } catch {
+      // Cannot reach backend; let the main fetch surface the error.
+    }
+
     if (!forceRefresh && typeof window !== "undefined") {
       const cached = sessionStorage.getItem(cacheKey);
       if (cached) {
@@ -76,6 +97,11 @@ export default function DashboardPage() {
       });
       setData(resp);
       if (typeof window !== "undefined") {
+        // Store under the versioned key and clean up any previous keys for this tab.
+        const prefix = "sunsync_opt_v2_";
+        Object.keys(sessionStorage)
+          .filter((k) => k.startsWith(prefix) && k !== cacheKey)
+          .forEach((k) => sessionStorage.removeItem(k));
         sessionStorage.setItem(cacheKey, JSON.stringify(resp));
       }
     } catch (err: any) {

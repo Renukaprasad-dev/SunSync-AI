@@ -1,5 +1,6 @@
 -- supabase/verify_002.sql
 -- Safe verification script for Migration 002 (save_site_configuration RPC)
+-- Canonical names verified: column sites.version, function save_site_configuration.
 -- Instructions: Run this script directly in the Supabase SQL Editor.
 -- It executes within an explicit transaction that ALWAYS rolls back at the end.
 
@@ -13,17 +14,26 @@ DECLARE
     v_test_tariff JSONB;
     v_current_version INTEGER;
 BEGIN
-    RAISE NOTICE '=== 1. Checking schema additions ===';
-    -- Verify version column on sites
+    RAISE NOTICE '=== 1. Checking schema: sites.version column (canonical; site_version alias removed) ===';
     IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
+        SELECT 1 FROM information_schema.columns
         WHERE table_name = 'sites' AND column_name = 'version'
     ) THEN
         RAISE EXCEPTION 'Verification Failed: sites.version column does not exist.';
     END IF;
     RAISE NOTICE 'SUCCESS: sites.version column exists.';
 
-    -- Verify RPC function exists
+    -- Confirm the redundant alias column was dropped
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'sites' AND column_name = 'site_version'
+    ) THEN
+        RAISE WARNING 'WARN: sites.site_version alias column still exists. Re-run migration 002 to drop it.';
+    ELSE
+        RAISE NOTICE 'SUCCESS: sites.site_version alias column is absent (clean schema).';
+    END IF;
+
+    RAISE NOTICE '=== 2. Checking RPC: save_site_configuration (canonical; aliases removed) ===';
     IF NOT EXISTS (
         SELECT 1 FROM pg_proc WHERE proname = 'save_site_configuration'
     ) THEN
@@ -31,16 +41,20 @@ BEGIN
     END IF;
     RAISE NOTICE 'SUCCESS: save_site_configuration RPC function is registered.';
 
-    -- Verify alias RPC functions exist
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_proc WHERE proname = 'save_site_configuration_atomic'
-    ) THEN
-        RAISE EXCEPTION 'Verification Failed: save_site_configuration_atomic alias RPC function does not exist.';
+    -- Confirm the old aliases were dropped
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'save_site_configuration_atomic') THEN
+        RAISE WARNING 'WARN: save_site_configuration_atomic alias still exists. Re-run migration 002 to drop it.';
+    ELSE
+        RAISE NOTICE 'SUCCESS: save_site_configuration_atomic alias is absent (clean schema).';
     END IF;
-    RAISE NOTICE 'SUCCESS: save_site_configuration_atomic alias RPC function is registered.';
 
-    RAISE NOTICE '=== 2. Testing transactional save execution ===';
-    -- Get or create demo site
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'save_site_config_atomic') THEN
+        RAISE WARNING 'WARN: save_site_config_atomic alias still exists. Re-run migration 002 to drop it.';
+    ELSE
+        RAISE NOTICE 'SUCCESS: save_site_config_atomic alias is absent (clean schema).';
+    END IF;
+
+    RAISE NOTICE '=== 3. Testing transactional save execution ===';
     SELECT id, version INTO v_site_id, v_current_version FROM sites LIMIT 1;
     IF v_site_id IS NULL THEN
         INSERT INTO sites (name, location, p_max_grid_kw, solar_capacity_kw)
@@ -67,7 +81,6 @@ BEGIN
         'notes', 'Test verification tariff'
     );
 
-    -- Execute RPC
     v_rpc_result := save_site_configuration(
         v_site_id,
         jsonb_build_object('p_max_grid_kw', 24.0, 'name', 'Updated Verification Factory'),
@@ -81,15 +94,14 @@ BEGIN
     END IF;
     RAISE NOTICE 'SUCCESS: save_site_configuration executed successfully. Result: %', v_rpc_result;
 
-    RAISE NOTICE '=== 3. Testing optimistic concurrency conflict detection ===';
+    RAISE NOTICE '=== 4. Testing optimistic concurrency conflict detection ===';
     BEGIN
-        -- Calling again with the stale version must raise version_conflict
         PERFORM save_site_configuration(
             v_site_id,
             jsonb_build_object('p_max_grid_kw', 20.0),
             v_test_machines,
             v_test_tariff,
-            v_current_version -- Stale version!
+            v_current_version  -- Stale version!
         );
         RAISE EXCEPTION 'Verification Failed: Stale version was accepted without conflict!';
     EXCEPTION WHEN OTHERS THEN

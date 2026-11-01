@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -117,3 +118,33 @@ app.include_router(optimize.router)
 app.include_router(scenarios.router)
 app.include_router(forecast.router)
 app.include_router(billing.router)
+
+
+# ---------------------------------------------------------------------------
+# /internal/cleanup — Vercel Cron endpoint (runs every 6 hours in production).
+# Protected by CRON_SECRET env var.  Vercel injects:
+#   Authorization: Bearer <CRON_SECRET>
+# A manual caller (e.g. curl) may also send the same header.
+# The demo site (DEMO_SITE_ID) is NEVER deleted by cleanup_expired_sandboxes().
+# ---------------------------------------------------------------------------
+@app.get("/internal/cleanup", tags=["Internal"])
+def cron_cleanup_sandboxes(request: Request):
+    cron_secret = os.environ.get("CRON_SECRET", "")
+    if not cron_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Sandbox cleanup endpoint is disabled: CRON_SECRET is not configured."
+        )
+
+    auth_header = request.headers.get("authorization", "")
+    expected = f"Bearer {cron_secret}"
+    if auth_header != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: invalid or missing Authorization header."
+        )
+
+    purged = repo.cleanup_expired_sandboxes(max_age_seconds=86400)  # 24 hours
+    logger.info(f"[cron/cleanup] Purged {purged} expired visitor sandbox(es).")
+    return {"status": "ok", "purged": purged}
+
