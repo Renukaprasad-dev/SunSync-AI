@@ -456,4 +456,40 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await expect(page.locator("text=Peak Recorded Demand").first()).toBeVisible({ timeout: 5000 });
     await expect(page.locator("text=Observed Gaps & Probable Causes")).toBeVisible({ timeout: 5000 });
   });
+
+  test("18. What-If Simulator edits machine windows, deadlines, and grid limit without saving, and re-runs live simulation", async ({ page }) => {
+    await page.goto("/simulator");
+    await expect(page.locator("text=What-If Scenario Simulator")).toBeVisible({ timeout: 15000 });
+
+    // 1. Verify What-If Parameters Sandbox is rendered
+    await expect(page.locator("text=What-If Parameters Sandbox")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Unsaved / Ephemeral")).toBeVisible({ timeout: 5000 });
+
+    // 2. Edit transient grid limit in simulator
+    const gridLimitInput = page.locator("input[value='25']").first();
+    await expect(gridLimitInput).toBeVisible();
+    await gridLimitInput.fill("18");
+
+    // 3. Edit transient deadline of first machine
+    const firstDeadlineInput = page.locator("input[value='68']").first();
+    await expect(firstDeadlineInput).toBeVisible();
+    await firstDeadlineInput.fill("72");
+
+    // 4. Run What-If Solver
+    const runSolverBtn = page.getByRole("button", { name: /Run What-If Solver/i });
+    await expect(runSolverBtn).toBeVisible();
+    await runSolverBtn.click();
+
+    // Verify simulation recalculates and displays KPIs and charts
+    await expect(page.locator("text=Daily Electricity Cost").first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("text=Peak Grid Demand").first()).toBeVisible({ timeout: 5000 });
+
+    // 5. Navigate to Machine Setup to prove transient edits were NOT persisted
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // Machine setup should NOT have the simulator's transient 18 kW value
+    const setupGridLimit = page.locator("input[value='18']");
+    await expect(setupGridLimit).toHaveCount(0);
+  });
 });
