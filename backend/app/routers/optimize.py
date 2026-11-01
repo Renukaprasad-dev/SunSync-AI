@@ -22,7 +22,7 @@ class OptimizeEndpointPayload(BaseModel):
     machines: Optional[List[Machine]] = None
     tariff: Optional[Tariff] = None
     solar_profile: Optional[SolarProfile] = None
-    p_max_grid_kw: Optional[float] = 25.0
+    p_max_grid_kw: Optional[float] = None
     base_load: Optional[List[float]] = None
 
 @router.post("/optimize", response_model=OptimizationResponse)
@@ -31,13 +31,14 @@ def run_optimization(payload: OptimizeEndpointPayload):
     site = repo.get_site(site_id)
     if not site:
         site_id = "00000000-0000-0000-0000-000000000001"
+        site = repo.get_site(site_id)
 
     # Use supplied objects or retrieve site defaults
     machines = payload.machines or repo.get_machines(site_id)
     tariff = payload.tariff or repo.get_tariff(site_id)
     solar_profile = payload.solar_profile or repo.get_solar_profile(site_id, payload.scenario)
     base_load = payload.base_load or repo.get_base_load(site_id)
-    p_max = payload.p_max_grid_kw or site.get("p_max_grid_kw", 25.0)
+    p_max = payload.p_max_grid_kw if payload.p_max_grid_kw is not None else float(site.get("p_max_grid_kw", 25.0))
 
     req = OptimizationRequest(
         site_id=site_id,

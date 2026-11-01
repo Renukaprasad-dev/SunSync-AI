@@ -85,9 +85,14 @@ When solar generation drops near zero (e.g. monsoon / heavily overcast day), Sun
 cd backend
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# For production deployment / slim build:
 pip install -r requirements.txt
 
-# Run backend unit & integration tests
+# For full local development (includes OR-Tools & XGBoost training code):
+pip install -r requirements-dev.txt
+
+# Run backend unit & integration tests (17 tests)
 pytest tests/ -v
 
 # Start FastAPI dev server
@@ -100,8 +105,20 @@ Interactive API docs are available at `http://localhost:8000/docs`.
 cd frontend
 npm install
 npm run dev
+
+# Run Playwright E2E smoke tests (6 tests)
+npx playwright test
 ```
 Open `http://localhost:3000` to interact with the dashboard.
+
+---
+
+## 5.1 Storage & Persistence Architecture
+
+SunSync AI features a unified dual-tier repository:
+1. **Production Mode (Supabase PostgreSQL REST API):** When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are provided in backend environment variables, all site configurations, machine inventories, tariffs, and solar profiles are persisted to PostgreSQL.
+2. **Local Demo Mode (Persistent File Store):** When Supabase credentials are absent, the repository gracefully falls back to a persistent JSON store at `backend/app/data/local_store.json`. Changes to machine parameters, newly added machines, deleted machines, factory grid limits ($P_{\max}$), and tariffs survive server restarts and browser reloads.
+3. **Machine Setup & Grid Limit ($P_{\max}$):** The Setup page dynamically updates the site's sanctioned peak import ceiling ($P_{\max}$), machine configurations, and tariff rates. The MILP optimizer and scenario simulator inherit this ceiling directly from the site configuration. All new machines receive deterministic RFC 4122 UUIDs.
 
 ---
 

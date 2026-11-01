@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.db import repo
 from app.routers import sites, optimize, scenarios, forecast
 
 logging.basicConfig(
@@ -40,7 +41,9 @@ def health_check():
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
         "intervals_per_day": settings.INTERVALS_PER_DAY,
-        "interval_minutes": settings.INTERVAL_MINUTES
+        "interval_minutes": settings.INTERVAL_MINUTES,
+        "storage_mode": repo.storage_mode,
+        "supabase_configured": repo.is_supabase_enabled
     }
 
 # Include routers

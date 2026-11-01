@@ -22,8 +22,7 @@ export default function SimulatorPage() {
     setError(null);
     try {
       const resp = await runSimulation({
-        scenario: targetScenario,
-        p_max_grid_kw: 25.0
+        scenario: targetScenario
       });
       setData(resp);
     } catch (e: any) {

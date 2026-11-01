@@ -13,7 +13,7 @@ class ScenarioSimulateRequest(BaseModel):
     machines: Optional[List[Machine]] = None
     tariff: Optional[Tariff] = None
     solar_profile: Optional[SolarProfile] = None
-    p_max_grid_kw: Optional[float] = 25.0
+    p_max_grid_kw: Optional[float] = None
     strategies: List[str] = Field(default=["baseline", "cost_optimized"])
 
 @router.post("/simulate", response_model=OptimizationResponse)

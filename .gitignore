@@ -4,6 +4,7 @@ node_modules/
 out/
 build/
 dist/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -20,6 +21,8 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+backend/app/data/
+*.local_store.json
 
 # Environment and secrets (Never commit!)
 .env

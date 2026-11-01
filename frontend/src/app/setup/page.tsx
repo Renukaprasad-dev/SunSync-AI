@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Cpu, Plus, Trash2, Save, RefreshCw, Check, AlertCircle } from "lucide-react";
-import { getMachines, updateMachines, getTariff } from "@/lib/api";
-import { Machine, Tariff } from "@/lib/types";
+import { Cpu, Plus, Trash2, Save, RefreshCw, Check, AlertCircle, Database } from "lucide-react";
+import { getSite, updateSite, getMachines, updateMachines, getTariff, updateTariff } from "@/lib/api";
+import { Site, Machine, Tariff } from "@/lib/types";
 import { slotToTime } from "@/lib/utils";
 import { SimulationDisclaimer } from "@/components/disclaimer";
 
 export default function SetupPage() {
+  const [site, setSite] = useState<Site | null>(null);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [tariff, setTariff] = useState<Tariff | null>(null);
   const [pMax, setPMax] = useState<number>(25.0);
@@ -20,7 +21,9 @@ export default function SetupPage() {
     async function loadData() {
       setLoading(true);
       try {
-        const [mList, tObj] = await Promise.all([getMachines(), getTariff()]);
+        const [siteObj, mList, tObj] = await Promise.all([getSite(), getMachines(), getTariff()]);
+        setSite(siteObj);
+        setPMax(siteObj.p_max_grid_kw ?? 25.0);
         setMachines(mList);
         setTariff(tObj);
       } catch (err: any) {
@@ -41,8 +44,9 @@ export default function SetupPage() {
   };
 
   const handleAddMachine = () => {
+    const newId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, "0")}`;
     const newM: Machine = {
-      id: `custom_m_${Date.now()}`,
+      id: newId,
       name: `Machine #${machines.length + 1}`,
       power_kw: 3.0,
       duration_intervals: 12, // 3 hours
@@ -59,10 +63,24 @@ export default function SetupPage() {
   };
 
   const validateInputs = (): string | null => {
+    if (!Number.isFinite(pMax) || pMax < 0.1 || pMax > 1000) {
+      return "Factory peak grid limit (P_max) must be a positive number between 0.1 kW and 1000 kW.";
+    }
+    if (tariff && (!Number.isFinite(tariff.demand_charge_rate_per_kw) || tariff.demand_charge_rate_per_kw < 0)) {
+      return "Peak demand charge rate cannot be negative.";
+    }
     for (const m of machines) {
-      if (m.power_kw < 0) return `Machine '${m.name}': power cannot be negative.`;
-      if (m.duration_intervals <= 0 || m.duration_intervals > 96) return `Machine '${m.name}': duration must be 1 to 96 intervals.`;
-      if (m.earliest_start > m.latest_start) return `Machine '${m.name}': earliest start slot (${m.earliest_start}) exceeds latest start slot (${m.latest_start}).`;
+      if (!m.name.trim()) return "Machine name cannot be empty.";
+      if (!Number.isFinite(m.power_kw) || m.power_kw < 0) return `Machine '${m.name}': power must be a non-negative number.`;
+      if (!Number.isInteger(m.duration_intervals) || m.duration_intervals <= 0 || m.duration_intervals > 96) {
+        return `Machine '${m.name}': duration must be an integer between 1 and 96 intervals.`;
+      }
+      if (m.earliest_start < 0 || m.earliest_start > 95) return `Machine '${m.name}': earliest start slot must be 0-95.`;
+      if (m.latest_start < 0 || m.latest_start > 95) return `Machine '${m.name}': latest start slot must be 0-95.`;
+      if (m.deadline_interval <= 0 || m.deadline_interval > 96) return `Machine '${m.name}': deadline slot must be 1-96.`;
+      if (m.earliest_start > m.latest_start) {
+        return `Machine '${m.name}': earliest start slot (${m.earliest_start}) exceeds latest start slot (${m.latest_start}).`;
+      }
       if (m.earliest_start + m.duration_intervals > m.deadline_interval) {
         return `Machine '${m.name}': run duration (${m.duration_intervals} slots) from earliest start (${m.earliest_start}) finishes after deadline (${m.deadline_interval}).`;
       }
@@ -78,12 +96,23 @@ export default function SetupPage() {
     }
     setSaving(true);
     setValidationError(null);
+    setSaveSuccess(false);
     try {
-      await updateMachines("00000000-0000-0000-0000-000000000001", machines);
+      const siteId = site?.id || "00000000-0000-0000-0000-000000000001";
+      const [savedSite, savedMachines, savedTariff] = await Promise.all([
+        updateSite(siteId, { p_max_grid_kw: pMax }),
+        updateMachines(siteId, machines),
+        tariff ? updateTariff(siteId, tariff) : Promise.resolve(null)
+      ]);
+      setSite(savedSite);
+      setPMax(savedSite.p_max_grid_kw);
+      setMachines(savedMachines);
+      if (savedTariff) setTariff(savedTariff);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (e: any) {
-      setValidationError(e?.message || "Failed to save machines.");
+      setValidationError(e?.message || "Failed to persist configuration changes.");
+      setSaveSuccess(false);
     } finally {
       setSaving(false);
     }
@@ -104,12 +133,18 @@ export default function SetupPage() {
 
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-800">
         <div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2">
-            <Cpu className="w-6 h-6 text-amber-400" />
-            Machine Inventory & Tariff Setup
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2">
+              <Cpu className="w-6 h-6 text-amber-400" />
+              Machine Inventory & Tariff Setup
+            </h1>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 border border-slate-700 text-slate-300">
+              <Database className="w-3 h-3 text-emerald-400" />
+              {site?.storage_mode === "supabase" ? "Supabase PostgreSQL" : "Local JSON Store"}
+            </span>
+          </div>
           <p className="text-xs text-slate-400 mt-1">
-            Configure machine power ratings, availability start windows, and strict production deadlines.
+            Configure machine power ratings, availability start windows, factory grid limit, and strict production deadlines.
           </p>
         </div>
 

@@ -1,5 +1,8 @@
 import copy
+import json
 import logging
+import uuid
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 import httpx
 
@@ -8,11 +11,22 @@ from app.core.config import settings
 
 logger = logging.getLogger("sunsync.db")
 
+LOCAL_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+LOCAL_STORE_PATH = LOCAL_DATA_DIR / "local_store.json"
+
+def ensure_uuid(val: str) -> str:
+    """Ensures string is a valid UUID; converts non-UUID strings deterministically."""
+    try:
+        uuid.UUID(str(val))
+        return str(val)
+    except (ValueError, TypeError):
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, str(val)))
+
 class DataRepository:
     """Unified repository for SunSync AI data.
     Directly persists to Supabase (PostgreSQL REST API) when SUPABASE_URL and
-    SUPABASE_SERVICE_ROLE_KEY are configured; gracefully falls back to an
-    in-memory repository seeded with the demo dataset when not set.
+    SUPABASE_SERVICE_ROLE_KEY are configured; gracefully falls back to local
+    JSON file store (and in-memory cache) seeded with the demo dataset when not set.
     """
 
     def __init__(self):
@@ -24,10 +38,15 @@ class DataRepository:
         self._optimization_runs: List[Dict[str, Any]] = []
 
         self._seed_demo_data()
+        self._load_local_store()
 
     @property
     def is_supabase_enabled(self) -> bool:
         return bool(settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY)
+
+    @property
+    def storage_mode(self) -> str:
+        return "supabase" if self.is_supabase_enabled else "local_file"
 
     def _get_supabase_headers(self) -> Dict[str, str]:
         return {
@@ -166,6 +185,38 @@ class DataRepository:
         # Base Load
         self._base_loads[demo_site_id] = [0.8 if (i < 32 or i >= 76) else 1.5 for i in range(96)]
 
+    def _load_local_store(self):
+        """Loads locally persisted store if available."""
+        if LOCAL_STORE_PATH.exists():
+            try:
+                with open(LOCAL_STORE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if "sites" in data:
+                    self._sites.update(data["sites"])
+                if "machines" in data:
+                    for s_id, m_list in data["machines"].items():
+                        self._machines[s_id] = [Machine(**m) for m in m_list]
+                if "tariffs" in data:
+                    for s_id, t_dict in data["tariffs"].items():
+                        self._tariffs[s_id] = Tariff(**t_dict)
+                logger.info(f"Loaded locally persisted configuration from {LOCAL_STORE_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed to read local store ({e}); using initial demo seed.")
+
+    def _save_local_store(self):
+        """Saves current state to local JSON store."""
+        try:
+            LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            serializable = {
+                "sites": self._sites,
+                "machines": {s_id: [m.model_dump() for m in m_list] for s_id, m_list in self._machines.items()},
+                "tariffs": {s_id: t.model_dump() for s_id, t in self._tariffs.items()}
+            }
+            with open(LOCAL_STORE_PATH, "w", encoding="utf-8") as f:
+                json.dump(serializable, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to write local store ({e})")
+
     # 1. Sites
     def list_sites(self) -> List[Dict[str, Any]]:
         if self.is_supabase_enabled:
@@ -177,7 +228,7 @@ class DataRepository:
                     if data:
                         return data
             except Exception as e:
-                logger.warning(f"Supabase list_sites failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase list_sites failed ({e}); falling back to local store.")
         return list(self._sites.values())
 
     def get_site(self, site_id: str) -> Optional[Dict[str, Any]]:
@@ -190,11 +241,11 @@ class DataRepository:
                     if data:
                         return data[0]
             except Exception as e:
-                logger.warning(f"Supabase get_site failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase get_site failed ({e}); falling back to local store.")
         return self._sites.get(site_id) or self._sites.get("00000000-0000-0000-0000-000000000001")
 
     def create_site(self, site_data: Dict[str, Any]) -> Dict[str, Any]:
-        s_id = site_data.get("id") or f"site_{len(self._sites) + 1}"
+        s_id = site_data.get("id") or str(uuid.uuid4())
         site_data["id"] = s_id
 
         if self.is_supabase_enabled:
@@ -202,16 +253,42 @@ class DataRepository:
                 url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites"
                 resp = httpx.post(url, headers=self._get_supabase_headers(), json=site_data, timeout=3.0)
                 if resp.status_code in (200, 201):
-                    return resp.json()[0]
+                    site_data = resp.json()[0]
             except Exception as e:
-                logger.warning(f"Supabase create_site failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase create_site failed ({e}); saving to local store.")
 
         self._sites[s_id] = site_data
-        self._machines[s_id] = copy.deepcopy(self._machines["00000000-0000-0000-0000-000000000001"])
-        self._tariffs[s_id] = copy.deepcopy(self._tariffs["00000000-0000-0000-0000-000000000001"])
-        self._solar_profiles[s_id] = copy.deepcopy(self._solar_profiles["00000000-0000-0000-0000-000000000001"])
-        self._base_loads[s_id] = copy.deepcopy(self._base_loads["00000000-0000-0000-0000-000000000001"])
+        self._machines[s_id] = copy.deepcopy(self._machines.get("00000000-0000-0000-0000-000000000001", []))
+        self._tariffs[s_id] = copy.deepcopy(self._tariffs.get("00000000-0000-0000-0000-000000000001", None))
+        self._solar_profiles[s_id] = copy.deepcopy(self._solar_profiles.get("00000000-0000-0000-0000-000000000001", {}))
+        self._base_loads[s_id] = copy.deepcopy(self._base_loads.get("00000000-0000-0000-0000-000000000001", []))
+        self._save_local_store()
         return site_data
+
+    def update_site(self, site_id: str, site_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        current = self.get_site(site_id)
+        if not current:
+            current = {"id": site_id, "name": "Site", "location": "Unknown"}
+
+        current.update(site_data)
+        self._sites[site_id] = current
+
+        if self.is_supabase_enabled:
+            try:
+                url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites?id=eq.{site_id}"
+                headers = self._get_supabase_headers()
+                resp = httpx.patch(url, headers=headers, json=site_data, timeout=3.0)
+                if resp.status_code in (200, 204):
+                    if resp.content:
+                        data = resp.json()
+                        if data:
+                            current = data[0]
+                            self._sites[site_id] = current
+            except Exception as e:
+                logger.warning(f"Supabase update_site failed ({e}); saved to local store.")
+
+        self._save_local_store()
+        return current
 
     # 2. Machines
     def get_machines(self, site_id: str) -> List[Machine]:
@@ -224,14 +301,37 @@ class DataRepository:
                     if records:
                         return [Machine(**r) for r in records]
             except Exception as e:
-                logger.warning(f"Supabase get_machines failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase get_machines failed ({e}); falling back to local store.")
         return self._machines.get(site_id) or self._machines.get("00000000-0000-0000-0000-000000000001", [])
 
     def save_machines(self, site_id: str, machines: List[Machine]) -> List[Machine]:
-        self._machines[site_id] = machines
+        # Validate/ensure valid UUIDs for all machines
+        clean_machines: List[Machine] = []
+        for m in machines:
+            m_dict = m.model_dump()
+            m_dict["id"] = ensure_uuid(m.id)
+            clean_machines.append(Machine(**m_dict))
+
+        self._machines[site_id] = clean_machines
+        self._save_local_store()
+
         if self.is_supabase_enabled:
             try:
-                # Upsert to Supabase
+                headers = self._get_supabase_headers()
+                # 1. Fetch current remote machine IDs for this site to detect deletions
+                check_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/machines?site_id=eq.{site_id}&select=id"
+                existing_resp = httpx.get(check_url, headers=headers, timeout=3.0)
+                if existing_resp.status_code == 200:
+                    existing_ids = {r["id"] for r in existing_resp.json()}
+                    incoming_ids = {m.id for m in clean_machines}
+                    deleted_ids = existing_ids - incoming_ids
+
+                    if deleted_ids:
+                        for d_id in deleted_ids:
+                            del_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/machines?site_id=eq.{site_id}&id=eq.{d_id}"
+                            httpx.delete(del_url, headers=headers, timeout=3.0)
+
+                # 2. Upsert incoming machines
                 url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/machines"
                 payload = [
                     {
@@ -245,14 +345,15 @@ class DataRepository:
                         "deadline_interval": m.deadline_interval,
                         "flexible": m.flexible
                     }
-                    for m in machines
+                    for m in clean_machines
                 ]
-                headers = self._get_supabase_headers()
-                headers["Prefer"] = "resolution=merge-duplicates"
-                httpx.post(url, headers=headers, json=payload, timeout=3.0)
+                upsert_headers = self._get_supabase_headers()
+                upsert_headers["Prefer"] = "resolution=merge-duplicates"
+                httpx.post(url, headers=upsert_headers, json=payload, timeout=3.0)
             except Exception as e:
-                logger.warning(f"Supabase save_machines failed ({e}); saved in-memory.")
-        return machines
+                logger.warning(f"Supabase save_machines failed ({e}); saved to local store.")
+
+        return clean_machines
 
     # 3. Tariff
     def get_tariff(self, site_id: str) -> Tariff:
@@ -271,14 +372,19 @@ class DataRepository:
                             notes=t.get("notes")
                         )
             except Exception as e:
-                logger.warning(f"Supabase get_tariff failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase get_tariff failed ({e}); falling back to local store.")
         return self._tariffs.get(site_id) or self._tariffs["00000000-0000-0000-0000-000000000001"]
 
     def save_tariff(self, site_id: str, tariff: Tariff) -> Tariff:
         self._tariffs[site_id] = tariff
+        self._save_local_store()
+
         if self.is_supabase_enabled:
             try:
-                url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/tariffs"
+                headers = self._get_supabase_headers()
+                check_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/tariffs?site_id=eq.{site_id}&select=id"
+                existing_resp = httpx.get(check_url, headers=headers, timeout=3.0)
+
                 payload = {
                     "site_id": site_id,
                     "name": "Configured Industrial Tariff",
@@ -287,11 +393,17 @@ class DataRepository:
                     "rates_json": tariff.rates,
                     "notes": tariff.notes
                 }
-                headers = self._get_supabase_headers()
-                headers["Prefer"] = "resolution=merge-duplicates"
-                httpx.post(url, headers=headers, json=payload, timeout=3.0)
+
+                if existing_resp.status_code == 200 and existing_resp.json():
+                    t_id = existing_resp.json()[0]["id"]
+                    url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/tariffs?id=eq.{t_id}"
+                    httpx.patch(url, headers=headers, json=payload, timeout=3.0)
+                else:
+                    url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/tariffs"
+                    httpx.post(url, headers=headers, json=payload, timeout=3.0)
             except Exception as e:
-                logger.warning(f"Supabase save_tariff failed ({e}); saved in-memory.")
+                logger.warning(f"Supabase save_tariff failed ({e}); saved to local store.")
+
         return tariff
 
     # 4. Solar Profile
@@ -310,7 +422,7 @@ class DataRepository:
                             capacity_kw=float(s.get("peak_kw", 5.0))
                         )
             except Exception as e:
-                logger.warning(f"Supabase get_solar_profile failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase get_solar_profile failed ({e}); falling back to local store.")
         site_profiles = self._solar_profiles.get(site_id) or self._solar_profiles["00000000-0000-0000-0000-000000000001"]
         return site_profiles.get(scenario) or site_profiles["sunny"]
 
@@ -325,7 +437,7 @@ class DataRepository:
                     if data:
                         return data[0]["load_json"]
             except Exception as e:
-                logger.warning(f"Supabase get_base_load failed ({e}); falling back to in-memory.")
+                logger.warning(f"Supabase get_base_load failed ({e}); falling back to local store.")
         return self._base_loads.get(site_id) or self._base_loads["00000000-0000-0000-0000-000000000001"]
 
 repo = DataRepository()

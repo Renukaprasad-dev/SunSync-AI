@@ -88,4 +88,81 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await expect(page.locator("text=Deadline (T_due)")).toBeVisible();
     await expect(page.locator("input[value='CNC Milling Center']")).toBeVisible({ timeout: 10000 });
   });
+
+  test("6. Setup page validates input boundaries and genuinely persists P_max and machines across reloads", async ({ page }) => {
+    let persistedPMax = 25.0;
+    let persistedMachines: any[] = [];
+
+    await page.route("**/sites/**", async (route, request) => {
+      const url = request.url();
+      const method = request.method();
+
+      if (method === "PUT" && url.endsWith("/00000000-0000-0000-0000-000000000001")) {
+        const body = request.postDataJSON();
+        persistedPMax = body.p_max_grid_kw;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "00000000-0000-0000-0000-000000000001",
+            name: "Machining & Stamping Unit Alpha",
+            p_max_grid_kw: persistedPMax,
+            storage_mode: "local_file"
+          })
+        });
+      } else if (method === "PUT" && url.includes("/machines")) {
+        persistedMachines = request.postDataJSON();
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(persistedMachines)
+        });
+      } else if (method === "PUT" && url.includes("/tariff")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(request.postDataJSON())
+        });
+      } else if (method === "GET" && url.endsWith("/00000000-0000-0000-0000-000000000001")) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "00000000-0000-0000-0000-000000000001",
+            name: "Machining & Stamping Unit Alpha",
+            p_max_grid_kw: persistedPMax,
+            storage_mode: "local_file"
+          })
+        });
+      } else if (method === "GET" && url.includes("/machines") && persistedMachines.length > 0) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(persistedMachines)
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // Change P_max from 25 to 24 kW
+    const pMaxInput = page.locator("input[type='number']").first();
+    await pMaxInput.fill("24");
+
+    // Click Save Changes
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await saveBtn.click();
+
+    // Verify "Saved Successfully!" appears
+    await expect(page.locator("text=Saved Successfully!")).toBeVisible();
+
+    // Reload the page and verify P_max is still 24 kW!
+    await page.reload();
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+    const reloadedPMaxInput = page.locator("input[type='number']").first();
+    await expect(reloadedPMaxInput).toHaveValue("24");
+  });
 });

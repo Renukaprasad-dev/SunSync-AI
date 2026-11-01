@@ -1,7 +1,17 @@
-import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse } from "./types";
+import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate } from "./types";
 import { slotToTime } from "./utils";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+const DEMO_SITE: Site = {
+  id: "00000000-0000-0000-0000-000000000001",
+  name: "Machining & Stamping Unit Alpha",
+  location: "Peenya Industrial Area, Bengaluru, Karnataka",
+  p_max_grid_kw: 25.0,
+  solar_capacity_kw: 5.0,
+  currency: "INR",
+  grid_emission_factor_kg_per_kwh: 0.82
+};
 
 // --- Seed fallback dataset for offline/client preview ---
 const DEMO_MACHINES: Machine[] = [
@@ -190,15 +200,33 @@ export async function fetchWithFallback<T>(url: string, options?: RequestInit, f
       }
     });
     if (!res.ok) {
-      throw new Error(`API error ${res.status}: ${res.statusText}`);
+      let detail = res.statusText;
+      try {
+        const errJson = await res.json();
+        if (errJson.detail) {
+          detail = typeof errJson.detail === "string" ? errJson.detail : JSON.stringify(errJson.detail);
+        }
+      } catch {}
+      throw new Error(`API error ${res.status}: ${detail}`);
     }
     return (await res.json()) as T;
-  } catch (err) {
+  } catch (err: any) {
     if (fallbackData !== undefined) {
       return fallbackData;
     }
     throw err;
   }
+}
+
+export async function getSite(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Site> {
+  return fetchWithFallback<Site>(`/sites/${siteId}`, undefined, DEMO_SITE);
+}
+
+export async function updateSite(siteId: string, data: SiteUpdate): Promise<Site> {
+  return fetchWithFallback<Site>(`/sites/${siteId}`, {
+    method: "PUT",
+    body: JSON.stringify(data)
+  });
 }
 
 export async function getMachines(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Machine[]> {
@@ -209,7 +237,7 @@ export async function updateMachines(siteId: string, machines: Machine[]): Promi
   return fetchWithFallback<Machine[]>(`/sites/${siteId}/machines`, {
     method: "PUT",
     body: JSON.stringify(machines)
-  }, machines);
+  });
 }
 
 export async function getTariff(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Tariff> {
@@ -218,6 +246,13 @@ export async function getTariff(siteId: string = "00000000-0000-0000-0000-000000
     demand_charge_rate_per_kw: 20.0,
     currency: "INR",
     notes: "Karnataka ToD tariff placeholder."
+  });
+}
+
+export async function updateTariff(siteId: string, tariff: Tariff): Promise<Tariff> {
+  return fetchWithFallback<Tariff>(`/sites/${siteId}/tariff`, {
+    method: "PUT",
+    body: JSON.stringify(tariff)
   });
 }
 
@@ -237,11 +272,10 @@ export async function runOptimization(payload: {
   tariff?: Tariff;
   p_max_grid_kw?: number;
 }): Promise<OptimizationResponse> {
-  const fallback = buildDemoOptimizationResponse(payload.scenario || "sunny");
   return fetchWithFallback<OptimizationResponse>("/optimize", {
     method: "POST",
     body: JSON.stringify(payload)
-  }, fallback);
+  });
 }
 
 export async function runSimulation(payload: {
@@ -252,11 +286,10 @@ export async function runSimulation(payload: {
   solar_profile?: SolarProfile;
   p_max_grid_kw?: number;
 }): Promise<OptimizationResponse> {
-  const fallback = buildDemoOptimizationResponse(payload.scenario || "sunny");
   return fetchWithFallback<OptimizationResponse>("/scenarios/simulate", {
     method: "POST",
     body: JSON.stringify(payload)
-  }, fallback);
+  });
 }
 
 export async function getForecast(scenario: string = "sunny"): Promise<ForecastResponse> {

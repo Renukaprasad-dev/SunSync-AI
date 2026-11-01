@@ -2,6 +2,23 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 from app.core.config import slot_to_time_str
 
+class Site(BaseModel):
+    id: str = Field(..., description="Unique site UUID")
+    name: str = Field(..., description="Site name")
+    location: str = Field(..., description="Site location")
+    p_max_grid_kw: float = Field(25.0, ge=0.1, le=1000.0, description="Factory peak grid demand limit in kW")
+    solar_capacity_kw: float = Field(5.0, ge=0.0, le=1000.0, description="Rooftop solar capacity in kW")
+    currency: str = Field("INR", description="Currency symbol/code")
+    grid_emission_factor_kg_per_kwh: float = Field(0.8200, ge=0.0, description="Grid emission factor in kg CO2/kWh")
+
+class SiteUpdate(BaseModel):
+    name: Optional[str] = None
+    location: Optional[str] = None
+    p_max_grid_kw: Optional[float] = Field(None, ge=0.1, le=1000.0)
+    solar_capacity_kw: Optional[float] = Field(None, ge=0.0, le=1000.0)
+    currency: Optional[str] = None
+    grid_emission_factor_kg_per_kwh: Optional[float] = Field(None, ge=0.0)
+
 class Machine(BaseModel):
     id: str = Field(..., description="Unique machine identifier")
     name: str = Field(..., description="Machine display name")

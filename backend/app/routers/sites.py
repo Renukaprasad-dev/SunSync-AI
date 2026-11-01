@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
-from app.models.domain import Machine, Tariff, SolarProfile
+from app.models.domain import Site, SiteUpdate, Machine, Tariff, SolarProfile
 from app.core.db import repo
 
 router = APIRouter(prefix="/sites", tags=["Sites & Configuration"])
@@ -18,7 +18,19 @@ def get_site(site_id: str):
     site = repo.get_site(site_id)
     if not site:
         raise HTTPException(status_code=404, detail=f"Site {site_id} not found")
-    return site
+    result = dict(site)
+    result["storage_mode"] = repo.storage_mode
+    return result
+
+@router.put("/{site_id}", response_model=Dict[str, Any])
+def update_site(site_id: str, update_data: SiteUpdate):
+    data = {k: v for k, v in update_data.model_dump().items() if v is not None}
+    updated = repo.update_site(site_id, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Site {site_id} not found")
+    result = dict(updated)
+    result["storage_mode"] = repo.storage_mode
+    return result
 
 @router.get("/{site_id}/machines", response_model=List[Machine])
 def get_machines(site_id: str):

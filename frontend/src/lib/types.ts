@@ -1,3 +1,23 @@
+export interface Site {
+  id: string;
+  name: string;
+  location?: string;
+  p_max_grid_kw: number;
+  solar_capacity_kw?: number;
+  currency?: string;
+  grid_emission_factor_kg_per_kwh?: number;
+  storage_mode?: string;
+}
+
+export interface SiteUpdate {
+  name?: string;
+  location?: string;
+  p_max_grid_kw?: number;
+  solar_capacity_kw?: number;
+  currency?: string;
+  grid_emission_factor_kg_per_kwh?: number;
+}
+
 export interface Machine {
   id: string;
   name: string;
