@@ -6,6 +6,7 @@ import { getHealth, getSiteConfig, updateSiteConfig } from "@/lib/api";
 import { Site, Machine, Tariff } from "@/lib/types";
 import { slotToTime } from "@/lib/utils";
 import { SimulationDisclaimer } from "@/components/disclaimer";
+import { TariffEditor } from "@/components/tariff-editor";
 
 export default function SetupPage() {
   const [site, setSite] = useState<Site | null>(null);
@@ -21,6 +22,7 @@ export default function SetupPage() {
   const [conflictError, setConflictError] = useState<boolean>(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [initialSnapshot, setInitialSnapshot] = useState<string>("");
+  const [isTariffValid, setIsTariffValid] = useState<boolean>(true);
 
   const isDirty = useMemo(() => {
     if (!initialSnapshot) return false;
@@ -102,6 +104,9 @@ export default function SetupPage() {
   const validateInputs = (): string | null => {
     if (!Number.isFinite(pMax) || pMax < 0.1 || pMax > 1000) {
       return "Factory peak grid limit (P_max) must be a positive number between 0.1 kW and 1000 kW.";
+    }
+    if (!isTariffValid) {
+      return "Time-of-Day tariff slabs are invalid. Slabs must continuously cover 00:00 to 24:00 without gaps or overlaps.";
     }
     if (tariff && (!Number.isFinite(tariff.demand_charge_rate_per_kw) || tariff.demand_charge_rate_per_kw < 0)) {
       return "Peak demand charge rate cannot be negative.";
@@ -444,6 +449,17 @@ export default function SetupPage() {
           </table>
         </div>
       </div>
+
+      {/* Time-of-Day Tariff Slabs & Demand Charge Editor */}
+      {tariff && (
+        <TariffEditor
+          tariff={tariff}
+          onChange={(newTariff, valid) => {
+            setTariff(newTariff);
+            setIsTariffValid(valid);
+          }}
+        />
+      )}
     </div>
   );
 }

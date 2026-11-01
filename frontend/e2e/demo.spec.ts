@@ -392,4 +392,44 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await expect(page.locator("text=Viewing Historical Replay")).not.toBeVisible({ timeout: 5000 });
     await expect(page.locator("text=Live MILP Optimal")).toBeVisible();
   });
+
+  test("16. Tariff editor edits Time-of-Day slabs, updates 96-interval preview chart, validates 24-hr continuity, and persists atomically", async ({ page }) => {
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // 1. Verify Tariff Editor and 96-interval preview chart are rendered
+    await expect(page.locator("text=Time-of-Day (ToD) Tariff Slabs & Demand Charge")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=96-Interval Tariff Profile Preview")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Full 24-hour continuous coverage verified")).toBeVisible({ timeout: 5000 });
+
+    // 2. Locate the first slab row in the Tariff table
+    const tariffTable = page.locator("table").last();
+    const firstRow = tariffTable.locator("tbody tr").first();
+    const endTimeInput = firstRow.locator("input").nth(2); // 0=name, 1=start, 2=end, 3=rate
+    const rateInput = firstRow.locator("input").nth(3);
+
+    // 3. Trigger validation gap error by editing the first slab's end time
+    await endTimeInput.fill("05:00");
+    await expect(page.locator("text=Gap detected")).toBeVisible({ timeout: 5000 });
+
+    // 4. Restore valid end time
+    await endTimeInput.fill("06:00");
+    await expect(page.locator("text=Full 24-hour continuous coverage verified")).toBeVisible({ timeout: 5000 });
+
+    // 5. Update the energy rate of the first slab
+    await rateInput.fill("5.2");
+
+    // 6. Save Configuration atomically
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await expect(saveBtn).toBeEnabled({ timeout: 5000 });
+    await saveBtn.click();
+    await expect(page.locator("text=Saved Successfully!")).toBeVisible({ timeout: 10000 });
+
+    // 7. Reload page from live backend and verify persisted slab rate
+    await page.reload();
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+    const reloadedTariffTable = page.locator("table").last();
+    const reloadedRateInput = reloadedTariffTable.locator("tbody tr").first().locator("input").nth(3);
+    await expect(reloadedRateInput).toHaveValue("5.2");
+  });
 });
