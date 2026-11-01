@@ -1,8 +1,9 @@
 import math
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from app.models.domain import Site, SiteUpdate, Machine, Tariff, SolarProfile, SiteConfigPayload, SiteConfigResponse
 from app.core.db import repo
+from app.core.security import rate_limiter, get_visitor_session_id
 
 router = APIRouter(prefix="/sites", tags=["Sites & Configuration"])
 
@@ -104,7 +105,9 @@ def get_site_config_endpoint(site_id: str):
     return config
 
 @router.put("/{site_id}/config", response_model=Dict[str, Any])
-def update_site_config_endpoint(site_id: str, payload: SiteConfigPayload):
+def update_site_config_endpoint(site_id: str, payload: SiteConfigPayload, request: Optional[Request] = None):
+    if request:
+        rate_limiter.check(f"write:{get_visitor_session_id(request)}")
     errors = validate_full_config(payload)
     if errors:
         raise HTTPException(

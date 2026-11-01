@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.models.domain import (
@@ -10,6 +10,7 @@ from app.models.domain import (
     SolarProfile
 )
 from app.core.db import repo
+from app.core.security import rate_limiter, get_visitor_session_id
 from app.scheduler.service import SchedulerService
 
 router = APIRouter(prefix="", tags=["Optimization"])
@@ -26,7 +27,9 @@ class OptimizeEndpointPayload(BaseModel):
     base_load: Optional[List[float]] = None
 
 @router.post("/optimize", response_model=OptimizationResponse)
-def run_optimization(payload: OptimizeEndpointPayload):
+def run_optimization(payload: OptimizeEndpointPayload, request: Optional[Request] = None):
+    if request:
+        rate_limiter.check(f"opt:{get_visitor_session_id(request)}")
     site_id = payload.site_id
     site = repo.get_site(site_id)
     if not site:

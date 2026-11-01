@@ -190,12 +190,29 @@ function buildDemoOptimizationResponse(scenario: string = "sunny"): Optimization
   };
 }
 
+function getClientSessionId(): string {
+  if (typeof window === "undefined") {
+    return "server-render-session";
+  }
+  try {
+    let sId = localStorage.getItem("sunsync_session_id");
+    if (!sId) {
+      sId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "10000000-0000-4000-8000-000000000000";
+      localStorage.setItem("sunsync_session_id", sId);
+    }
+    return sId;
+  } catch {
+    return "fallback-client-session";
+  }
+}
+
 export async function fetchWithFallback<T>(url: string, options?: RequestInit, fallbackData?: T): Promise<T> {
   try {
     const res = await fetch(`${API_BASE_URL}${url}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
+        "X-Visitor-Session-Id": getClientSessionId(),
         ...(options?.headers || {})
       }
     });
