@@ -1,11 +1,42 @@
 "use client";
 
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sun, Zap, Sliders, LineChart, Cpu, CloudSun, History, FileCheck } from "lucide-react";
+import { Sun, Zap, Sliders, LineChart, Cpu, CloudSun, History, FileCheck, RefreshCw } from "lucide-react";
+import { getHealth, API_BASE_URL } from "@/lib/api";
+import { HealthResponse } from "@/lib/types";
 
 export function Navbar() {
   const pathname = usePathname();
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthStatus, setHealthStatus] = useState<"checking" | "connected" | "ephemeral" | "offline">("checking");
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  const checkHealth = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const data = await getHealth();
+      setHealth(data);
+      if (data.storage_mode === "memory") {
+        setHealthStatus("ephemeral");
+      } else {
+        setHealthStatus("connected");
+      }
+    } catch {
+      setHealth(null);
+      setHealthStatus("offline");
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkHealth();
+    // Periodically re-check health every 30 seconds
+    const interval = setInterval(checkHealth, 30000);
+    return () => clearInterval(interval);
+  }, [checkHealth]);
 
   const navLinks = [
     { href: "/", label: "Overview", icon: Zap },
@@ -32,7 +63,7 @@ export function Navbar() {
           </div>
         </Link>
 
-        <nav className="hidden md:flex items-center gap-1.5">
+        <nav className="hidden lg:flex items-center gap-1.5">
           {navLinks.map((link) => {
             const Icon = link.icon;
             const active = pathname === link.href;
@@ -54,6 +85,51 @@ export function Navbar() {
         </nav>
 
         <div className="flex items-center gap-2.5">
+          {/* Backend Health Status Badge */}
+          <button
+            onClick={checkHealth}
+            title={
+              healthStatus === "connected"
+                ? `Backend Online (${health?.storage_mode}, durable) at ${API_BASE_URL} - Click to refresh`
+                : healthStatus === "ephemeral"
+                ? `Backend Online (${health?.storage_mode}, ephemeral memory) at ${API_BASE_URL} - Click to refresh`
+                : healthStatus === "offline"
+                ? `Cannot reach backend at ${API_BASE_URL} (is port 8000 running?) - Click to retry`
+                : `Checking backend health at ${API_BASE_URL}...`
+            }
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+              healthStatus === "connected"
+                ? "bg-emerald-950/60 border-emerald-700/60 text-emerald-400 hover:bg-emerald-900/60"
+                : healthStatus === "ephemeral"
+                ? "bg-amber-950/60 border-amber-700/60 text-amber-400 hover:bg-amber-900/60"
+                : healthStatus === "offline"
+                ? "bg-rose-950/60 border-rose-700/60 text-rose-400 hover:bg-rose-900/60"
+                : "bg-slate-900 border-slate-700 text-slate-400"
+            }`}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                healthStatus === "connected"
+                  ? "bg-emerald-400 animate-pulse"
+                  : healthStatus === "ephemeral"
+                  ? "bg-amber-400"
+                  : healthStatus === "offline"
+                  ? "bg-rose-500"
+                  : "bg-slate-400 animate-pulse"
+              }`}
+            />
+            <span className="hidden sm:inline">
+              {healthStatus === "connected"
+                ? `API: ${health?.storage_mode || "online"}`
+                : healthStatus === "ephemeral"
+                ? "API: memory"
+                : healthStatus === "offline"
+                ? "API Offline"
+                : "Checking..."}
+            </span>
+            <RefreshCw className={`w-3 h-3 ml-0.5 ${isRefreshing ? "animate-spin" : "opacity-60"}`} />
+          </button>
+
           <Link
             href="/dashboard"
             className="inline-flex items-center justify-center text-xs font-semibold px-3 py-1.5 rounded-md bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"

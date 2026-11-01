@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
+    "dev:all": "node ../scripts/dev.mjs",
+    "doctor": "node ../scripts/doctor.mjs",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint",

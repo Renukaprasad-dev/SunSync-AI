@@ -98,54 +98,53 @@ export default function ForecastPage() {
       orientation: "h",
       y: -0.22,
       font: { color: "#94a3b8", size: 11 },
-      bgcolor: "transparent"
+      x: 0.1
     },
     xaxis: {
+      gridcolor: "#334155",
       color: "#94a3b8",
-      gridcolor: "rgba(51, 65, 85, 0.4)",
-      tickvals: [0, 16, 32, 48, 64, 80, 95].map((s) => slotToTime(s)),
-      tickfont: { size: 10 }
+      tickfont: { size: 9 },
+      nticks: 12
     },
     yaxis: {
       title: "Power (kW)",
-      titlefont: { size: 11, color: "#94a3b8" },
+      titlefont: { size: 10, color: "#94a3b8" },
+      gridcolor: "#334155",
       color: "#94a3b8",
-      gridcolor: "rgba(51, 65, 85, 0.4)",
-      rangemode: "tozero",
-      tickfont: { size: 10 }
+      tickfont: { size: 9 }
     }
   };
 
   const weatherLayout: any = {
     title: {
-      text: "Weather Features (Open-Meteo Integration)",
+      text: "Exogenous Open-Meteo Weather Parameters (Solar & Temperature Drivers)",
       font: { color: "#f1f5f9", size: 14 }
     },
     paper_bgcolor: "transparent",
     plot_bgcolor: "rgba(15, 23, 42, 0.6)",
     margin: { l: 48, r: 48, t: 36, b: 40 },
-    height: 260,
+    height: 250,
     autosize: true,
     showlegend: true,
     legend: {
       orientation: "h",
       y: -0.25,
       font: { color: "#94a3b8", size: 11 },
-      bgcolor: "transparent"
+      x: 0.25
     },
     xaxis: {
+      gridcolor: "#334155",
       color: "#94a3b8",
-      gridcolor: "rgba(51, 65, 85, 0.4)",
-      tickvals: [0, 16, 32, 48, 64, 80, 95].map((s) => slotToTime(s)),
-      tickfont: { size: 10 }
+      tickfont: { size: 9 },
+      nticks: 12
     },
     yaxis: {
       title: "Cloud Cover (%)",
       titlefont: { size: 10, color: "#94a3b8" },
+      gridcolor: "#334155",
       color: "#94a3b8",
-      gridcolor: "rgba(51, 65, 85, 0.4)",
-      range: [0, 100],
-      tickfont: { size: 9 }
+      tickfont: { size: 9 },
+      range: [0, 105]
     },
     yaxis2: {
       title: "Temp (°C)",
@@ -202,15 +201,19 @@ export default function ForecastPage() {
       )}
 
       {error && (
-        <div className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{error}</span>
+        <div className="p-6 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 space-y-3 text-center sm:text-left sm:flex sm:items-center sm:justify-between sm:space-y-0">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-white">Forecast Unavailable</p>
+              <p className="text-xs text-rose-300 mt-0.5">{error}</p>
+            </div>
           </div>
           <button
             onClick={() => fetchForecastData(scenario)}
-            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[11px] font-semibold"
+            className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shadow-md inline-flex items-center gap-1.5"
           >
+            <RefreshCw className="w-3.5 h-3.5" />
             Retry
           </button>
         </div>
@@ -266,18 +269,20 @@ export default function ForecastPage() {
         </div>
       )}
 
-      {/* Main Forecast Chart */}
-      <div className="w-full bg-slate-900/80 rounded-xl p-3 border border-slate-800 shadow-lg">
-        <DynamicPlot
-          data={traces}
-          layout={mainLayout}
-          useResizeHandler={true}
-          className="w-full"
-          config={{ displayModeBar: false, responsive: true }}
-        />
-      </div>
+      {/* Main Forecast Chart - only rendered when data is loaded */}
+      {data && (
+        <div className="w-full bg-slate-900/80 rounded-xl p-3 border border-slate-800 shadow-lg">
+          <DynamicPlot
+            data={traces}
+            layout={mainLayout}
+            useResizeHandler={true}
+            className="w-full"
+            config={{ displayModeBar: false, responsive: true }}
+          />
+        </div>
+      )}
 
-      {/* Weather Features Chart */}
+      {/* Weather Features Chart - only rendered when data is loaded */}
       {data?.weather && (
         <div className="w-full bg-slate-900/80 rounded-xl p-3 border border-slate-800 shadow-lg">
           <DynamicPlot

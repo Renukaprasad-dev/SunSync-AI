@@ -1,9 +1,10 @@
 import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse, SiteConfigPayload, SiteConfigResponse, OptimizationRunSummary, OptimizationRunDetail, BillRealityCheckRequest, BillRealityCheckResponse } from "./types";
 import { slotToTime } from "./utils";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const RAW_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+export const API_BASE_URL = RAW_API_BASE_URL.replace(/\/+$/, "");
 
-const DEMO_SITE: Site = {
+export const DEMO_SITE: Site = {
   id: "00000000-0000-0000-0000-000000000001",
   name: "Machining & Stamping Unit Alpha",
   location: "Peenya Industrial Area, Bengaluru, Karnataka",
@@ -13,8 +14,8 @@ const DEMO_SITE: Site = {
   grid_emission_factor_kg_per_kwh: 0.82
 };
 
-// --- Seed fallback dataset for offline/client preview ---
-const DEMO_MACHINES: Machine[] = [
+// --- Seed fallback dataset for preview/offline exploration ---
+export const DEMO_MACHINES: Machine[] = [
   { id: "1", name: "CNC Milling Center", power_kw: 4.0, duration_intervals: 16, earliest_start: 32, latest_start: 48, deadline_interval: 68, flexible: true },
   { id: "2", name: "Industrial Air Compressor", power_kw: 3.5, duration_intervals: 12, earliest_start: 32, latest_start: 48, deadline_interval: 64, flexible: true },
   { id: "3", name: "Plastic Injection Molding", power_kw: 5.0, duration_intervals: 14, earliest_start: 34, latest_start: 44, deadline_interval: 64, flexible: true },
@@ -24,171 +25,18 @@ const DEMO_MACHINES: Machine[] = [
   { id: "7", name: "Water Chiller & Pump", power_kw: 2.5, duration_intervals: 12, earliest_start: 40, latest_start: 60, deadline_interval: 76, flexible: true }
 ];
 
-const DEMO_SOLAR: number[] = Array.from({ length: 96 }, (_, i) => {
+export const DEMO_SOLAR: number[] = Array.from({ length: 96 }, (_, i) => {
   if (i < 26 || i >= 72) return 0;
   const val = 5.0 * Math.exp(-Math.pow(i - 49, 2) / (2 * 100));
   return Math.round(Math.max(0, val) * 100) / 100;
 });
 
-const DEMO_TARIFF: number[] = Array.from({ length: 96 }, (_, i) => {
+export const DEMO_TARIFF: number[] = Array.from({ length: 96 }, (_, i) => {
   if (i >= 32 && i < 40) return 9.0;
   if (i >= 72 && i < 88) return 9.5;
   if (i >= 24 && i < 72) return 7.0;
   return 4.5;
 });
-
-function buildDemoOptimizationResponse(scenario: string = "sunny"): OptimizationResponse {
-  const isOvercast = scenario === "overcast";
-  const solarGen = isOvercast ? DEMO_SOLAR.map((v) => Math.round(v * 0.12 * 100) / 100) : DEMO_SOLAR;
-
-  const baselineM = DEMO_MACHINES.map((m) => ({
-    machine_id: m.id,
-    machine_name: m.name,
-    start_slot: m.earliest_start,
-    end_slot: m.earliest_start + m.duration_intervals,
-    start_time_str: slotToTime(m.earliest_start),
-    end_time_str: slotToTime(m.earliest_start + m.duration_intervals),
-    power_kw: m.power_kw,
-    duration_hours: m.duration_intervals * 0.25,
-    energy_kwh: m.power_kw * m.duration_intervals * 0.25,
-    flexible: m.flexible,
-    reason: m.flexible ? "Unmoved from earliest start." : "Fixed non-flexible production sequence."
-  }));
-
-  const optM = DEMO_MACHINES.map((m) => {
-    let start = m.earliest_start;
-    if (m.id === "1") start = 44; // 11:00
-    if (m.id === "2") start = 46; // 11:30
-    if (m.id === "3") start = 40; // 10:00
-    if (m.id === "4") start = 48; // 12:00
-    if (m.id === "7") start = 52; // 13:00
-
-    let reason = "Fixed operational slot.";
-    if (m.flexible) {
-      reason = isOvercast
-        ? `Shifted from ${slotToTime(m.earliest_start)} to ${slotToTime(start)}: avoids morning peak tariff (₹9.00/kWh), saves demand charge, finishes before ${slotToTime(m.deadline_interval)}.`
-        : `Shifted from ${slotToTime(m.earliest_start)} to ${slotToTime(start)}: absorbs 4.8 kW rooftop solar window, eliminates morning grid spike, completes before ${slotToTime(m.deadline_interval)}.`;
-    }
-
-    return {
-      machine_id: m.id,
-      machine_name: m.name,
-      start_slot: start,
-      end_slot: start + m.duration_intervals,
-      start_time_str: slotToTime(start),
-      end_time_str: slotToTime(start + m.duration_intervals),
-      power_kw: m.power_kw,
-      duration_hours: m.duration_intervals * 0.25,
-      energy_kwh: m.power_kw * m.duration_intervals * 0.25,
-      flexible: m.flexible,
-      reason
-    };
-  });
-
-  const baseLoadProfile = Array.from({ length: 96 }, (_, i) => {
-    const base = (i < 32 || i >= 76) ? 0.8 : 1.5;
-    const machinesKw = baselineM.reduce((acc, m) => (m.start_slot <= i && i < m.end_slot ? acc + m.power_kw : acc), 0);
-    return Math.round((base + machinesKw) * 100) / 100;
-  });
-
-  const optLoadProfile = Array.from({ length: 96 }, (_, i) => {
-    const base = (i < 32 || i >= 76) ? 0.8 : 1.5;
-    const machinesKw = optM.reduce((acc, m) => (m.start_slot <= i && i < m.end_slot ? acc + m.power_kw : acc), 0);
-    return Math.round((base + machinesKw) * 100) / 100;
-  });
-
-  const baseGridProfile = baseLoadProfile.map((l, i) => Math.max(0, Math.round((l - solarGen[i]) * 100) / 100));
-  const optGridProfile = optLoadProfile.map((l, i) => Math.max(0, Math.round((l - solarGen[i]) * 100) / 100));
-  const baseSolarUsed = baseLoadProfile.map((l, i) => Math.min(l, solarGen[i]));
-  const optSolarUsed = optLoadProfile.map((l, i) => Math.min(l, solarGen[i]));
-
-  const reasonsMap: Record<string, string> = {};
-  optM.forEach((m) => {
-    reasonsMap[m.machine_id] = m.reason || "Scheduled optimal.";
-  });
-
-  return {
-    site_id: "00000000-0000-0000-0000-000000000001",
-    scenario,
-    timestamp: new Date().toISOString(),
-    disclaimer: "Based on simulated data and mathematical optimization models. Validate against real bills.",
-    strategies: {
-      baseline: {
-        strategy_name: "baseline",
-        display_title: "Baseline (Earliest Feasible Start)",
-        status: "OPTIMAL",
-        solver_duration_ms: 2.5,
-        machine_schedules: baselineM,
-        load_profile: baseLoadProfile,
-        grid_profile: baseGridProfile,
-        solar_profile: solarGen,
-        solar_used_profile: baseSolarUsed,
-        kpis: {
-          daily_cost_rs: isOvercast ? 548.0 : 527.2,
-          peak_grid_demand_kw: 13.5,
-          solar_energy_used_kwh: isOvercast ? 3.0 : 31.8,
-          grid_energy_imported_kwh: 52.4,
-          total_factory_energy_kwh: 84.2,
-          solar_self_consumption_pct: isOvercast ? 98.0 : 81.5,
-          solar_coverage_pct: isOvercast ? 3.6 : 37.8,
-          deadline_violations: 0,
-          estimated_co2_kg: 42.97
-        },
-        reasons: ["All machines placed at earliest start slots."],
-        verifier_passed: true
-      },
-      solar_aware: {
-        strategy_name: "solar_aware",
-        display_title: "Solar-Aware (Maximize Solar Self-Consumption)",
-        status: "OPTIMAL",
-        solver_duration_ms: 18.2,
-        machine_schedules: optM,
-        load_profile: optLoadProfile,
-        grid_profile: optGridProfile,
-        solar_profile: solarGen,
-        solar_used_profile: optSolarUsed,
-        kpis: {
-          daily_cost_rs: isOvercast ? 420.0 : 365.4,
-          peak_grid_demand_kw: 7.5,
-          solar_energy_used_kwh: isOvercast ? 3.0 : 38.4,
-          grid_energy_imported_kwh: 45.8,
-          total_factory_energy_kwh: 84.2,
-          solar_self_consumption_pct: 100.0,
-          solar_coverage_pct: isOvercast ? 3.6 : 45.6,
-          deadline_violations: 0,
-          estimated_co2_kg: 37.56
-        },
-        reasons: Object.values(reasonsMap),
-        verifier_passed: true
-      },
-      cost_optimized: {
-        strategy_name: "cost_optimized",
-        display_title: "Cost-Optimized (Solar + Tariff + Demand Arbitrage)",
-        status: "OPTIMAL",
-        solver_duration_ms: 22.4,
-        machine_schedules: optM,
-        load_profile: optLoadProfile,
-        grid_profile: optGridProfile,
-        solar_profile: solarGen,
-        solar_used_profile: optSolarUsed,
-        kpis: {
-          daily_cost_rs: isOvercast ? 385.0 : 304.8,
-          peak_grid_demand_kw: 4.5,
-          solar_energy_used_kwh: isOvercast ? 3.0 : 38.4,
-          grid_energy_imported_kwh: 45.8,
-          total_factory_energy_kwh: 84.2,
-          solar_self_consumption_pct: 100.0,
-          solar_coverage_pct: isOvercast ? 3.6 : 45.6,
-          deadline_violations: 0,
-          estimated_co2_kg: 37.56
-        },
-        reasons: Object.values(reasonsMap),
-        verifier_passed: true
-      }
-    },
-    machine_reasons: reasonsMap
-  };
-}
 
 function getClientSessionId(): string {
   if (typeof window === "undefined") {
@@ -207,61 +55,101 @@ function getClientSessionId(): string {
 }
 
 export async function fetchWithFallback<T>(url: string, options?: RequestInit, fallbackData?: T): Promise<T> {
-  try {
-    const res = await fetch(`${API_BASE_URL}${url}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Visitor-Session-Id": getClientSessionId(),
-        ...(options?.headers || {})
-      }
-    });
-    if (!res.ok) {
-      let detail = res.statusText;
+  const method = (options?.method || "GET").toUpperCase();
+  const isGet = method === "GET";
+  const maxAttempts = isGet ? 2 : 1;
+
+  let lastError: any = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const primaryUrl = `${API_BASE_URL}${url}`;
+      let res: Response;
+
       try {
-        const errJson = await res.json();
-        if (errJson.detail) {
-          detail = typeof errJson.detail === "string" ? errJson.detail : JSON.stringify(errJson.detail);
+        res = await fetch(primaryUrl, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Visitor-Session-Id": getClientSessionId(),
+            ...(options?.headers || {})
+          }
+        });
+      } catch (networkErr: any) {
+        // If localhost:8000 fails (e.g. Windows IPv6 ::1 resolution mismatch), transparently retry with 127.0.0.1
+        if (API_BASE_URL.includes("localhost:8000")) {
+          try {
+            const fallbackHostUrl = primaryUrl.replace("localhost:8000", "127.0.0.1:8000");
+            res = await fetch(fallbackHostUrl, {
+              ...options,
+              headers: {
+                "Content-Type": "application/json",
+                "X-Visitor-Session-Id": getClientSessionId(),
+                ...(options?.headers || {})
+              }
+            });
+          } catch {
+            throw networkErr;
+          }
+        } else {
+          throw networkErr;
         }
-      } catch {}
-      throw new Error(`API error ${res.status}: ${detail}`);
+      }
+
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const errJson = await res.json();
+          if (errJson.detail) {
+            detail = typeof errJson.detail === "string" ? errJson.detail : JSON.stringify(errJson.detail);
+          }
+        } catch {}
+
+        if (res.status === 500) {
+          throw new Error(`Server error (500): ${detail}`);
+        } else if (res.status === 429) {
+          throw new Error(`Rate limit exceeded (429): ${detail}`);
+        } else if (res.status === 413) {
+          throw new Error(`Payload too large (413): ${detail}`);
+        } else if (res.status === 409) {
+          throw new Error(`Configuration conflict (409): ${detail}`);
+        } else if (res.status === 422) {
+          throw new Error(`Validation error (422): ${detail}`);
+        } else {
+          throw new Error(`Rejected (${res.status}): ${detail}`);
+        }
+      }
+
+      return (await res.json()) as T;
+    } catch (err: any) {
+      lastError = err;
+      if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("fetch"))) {
+        lastError = new Error(
+          `Cannot reach the backend at ${API_BASE_URL} (is the FastAPI backend running on port 8000? CORS blocked?)`
+        );
+      }
+
+      // If GET request, wait briefly and retry
+      if (isGet && attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      break;
     }
-    return (await res.json()) as T;
-  } catch (err: any) {
-    if (fallbackData !== undefined) {
-      return fallbackData;
-    }
-    throw err;
   }
+
+  if (fallbackData !== undefined) {
+    return fallbackData;
+  }
+  throw lastError;
 }
 
 export async function getHealth(): Promise<HealthResponse> {
-  return fetchWithFallback<HealthResponse>("/health", undefined, {
-    status: "healthy",
-    service: "SunSync AI",
-    version: "1.0.0",
-    intervals_per_day: 96,
-    interval_minutes: 15,
-    storage_mode: "memory",
-    durable: false,
-    supabase_configured: false
-  });
+  return fetchWithFallback<HealthResponse>("/health");
 }
 
 export async function getSiteConfig(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<SiteConfigResponse> {
-  return fetchWithFallback<SiteConfigResponse>(`/sites/${siteId}/config`, undefined, {
-    site: DEMO_SITE,
-    machines: DEMO_MACHINES,
-    tariff: {
-      rates: DEMO_TARIFF,
-      demand_charge_rate_per_kw: 20.0,
-      currency: "INR",
-      notes: "Karnataka ToD tariff placeholder."
-    },
-    version: 1,
-    storage_mode: "memory",
-    durable: false
-  });
+  return fetchWithFallback<SiteConfigResponse>(`/sites/${siteId}/config`);
 }
 
 export async function updateSiteConfig(siteId: string, payload: SiteConfigPayload): Promise<SiteConfigResponse> {
@@ -272,7 +160,7 @@ export async function updateSiteConfig(siteId: string, payload: SiteConfigPayloa
 }
 
 export async function getSite(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Site> {
-  return fetchWithFallback<Site>(`/sites/${siteId}`, undefined, DEMO_SITE);
+  return fetchWithFallback<Site>(`/sites/${siteId}`);
 }
 
 export async function updateSite(siteId: string, data: SiteUpdate): Promise<Site> {
@@ -283,7 +171,7 @@ export async function updateSite(siteId: string, data: SiteUpdate): Promise<Site
 }
 
 export async function getMachines(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Machine[]> {
-  return fetchWithFallback<Machine[]>(`/sites/${siteId}/machines`, undefined, DEMO_MACHINES);
+  return fetchWithFallback<Machine[]>(`/sites/${siteId}/machines`);
 }
 
 export async function updateMachines(siteId: string, machines: Machine[]): Promise<Machine[]> {
@@ -294,12 +182,7 @@ export async function updateMachines(siteId: string, machines: Machine[]): Promi
 }
 
 export async function getTariff(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<Tariff> {
-  return fetchWithFallback<Tariff>(`/sites/${siteId}/tariff`, undefined, {
-    rates: DEMO_TARIFF,
-    demand_charge_rate_per_kw: 20.0,
-    currency: "INR",
-    notes: "Karnataka ToD tariff placeholder."
-  });
+  return fetchWithFallback<Tariff>(`/sites/${siteId}/tariff`);
 }
 
 export async function updateTariff(siteId: string, tariff: Tariff): Promise<Tariff> {
@@ -310,11 +193,7 @@ export async function updateTariff(siteId: string, tariff: Tariff): Promise<Tari
 }
 
 export async function getSolarProfile(siteId: string = "00000000-0000-0000-0000-000000000001", scenario: string = "sunny"): Promise<SolarProfile> {
-  return fetchWithFallback<SolarProfile>(`/sites/${siteId}/solar?scenario=${scenario}`, undefined, {
-    scenario,
-    generation: DEMO_SOLAR,
-    capacity_kw: 5.0
-  });
+  return fetchWithFallback<SolarProfile>(`/sites/${siteId}/solar?scenario=${scenario}`);
 }
 
 export async function runOptimization(payload: {

@@ -492,4 +492,109 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     const setupGridLimit = page.locator("input[value='18']");
     await expect(setupGridLimit).toHaveCount(0);
   });
+
+  test("19. Developer experience regression: all 7 pages load real data without console errors, network failures, or 'Failed to fetch'", async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const failedRequests: string[] = [];
+
+    page.on("console", (msg) => {
+      if (msg.type() === "error") {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    page.on("pageerror", (err) => {
+      consoleErrors.push(err.message);
+    });
+
+    page.on("requestfailed", (req) => {
+      failedRequests.push(`${req.method()} ${req.url()} - ${req.failure()?.errorText}`);
+    });
+
+    const routesToTest = [
+      {
+        path: "/",
+        assertContent: async () => {
+          await expect(page.locator("h1")).toContainText("Machine Scheduling");
+          await expect(page.locator("text=Simulated Decision Support")).toBeVisible();
+        }
+      },
+      {
+        path: "/dashboard",
+        assertContent: async () => {
+          await expect(page.locator("text=Daily Electricity Cost").first()).toBeVisible({ timeout: 15000 });
+          await expect(page.locator("text=Peak Grid Demand").first()).toBeVisible();
+          await expect(page.locator("text=VERIFIED STRICT")).toBeVisible();
+          await expect(page.locator("text=0 Violations")).toBeVisible();
+          // Ensure real values are rendered (contains ₹ currency symbol)
+          const bodyText = await page.innerText("body");
+          expect(bodyText).toContain("₹");
+        }
+      },
+      {
+        path: "/history",
+        assertContent: async () => {
+          await expect(page.locator("text=Optimization Run History")).toBeVisible({ timeout: 15000 });
+          await expect(page.locator("text=Logged Solver Runs")).toBeVisible();
+          // Verify history table has at least one real entry
+          await expect(page.locator("table")).toBeVisible();
+        }
+      },
+      {
+        path: "/bill-check",
+        assertContent: async () => {
+          await expect(page.locator("text=Utility Bill Reality Check")).toBeVisible({ timeout: 15000 });
+          await expect(page.locator("text=Total Monthly Bill").first()).toBeVisible();
+          await expect(page.locator("text=Observed Gaps & Probable Causes")).toBeVisible();
+        }
+      },
+      {
+        path: "/simulator",
+        assertContent: async () => {
+          await expect(page.locator("text=What-If Scenario Simulator")).toBeVisible({ timeout: 15000 });
+          await expect(page.locator("text=What-If Parameters Sandbox")).toBeVisible();
+          await expect(page.locator("text=CNC Milling Center").first()).toBeVisible();
+        }
+      },
+      {
+        path: "/setup",
+        assertContent: async () => {
+          await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+          await expect(page.locator("input[value='CNC Milling Center']")).toBeVisible();
+          await expect(page.locator("text=Time-of-Day (ToD) Tariff Slabs")).toBeVisible();
+        }
+      },
+      {
+        path: "/forecast",
+        assertContent: async () => {
+          await expect(page.locator("text=XGBoost Solar & Factory Load Forecaster")).toBeVisible({ timeout: 15000 });
+          await expect(page.locator("text=Solar MAE")).toBeVisible();
+          await expect(page.locator("text=Solar RMSE")).toBeVisible();
+          // Assert real numbers in metric cards
+          await expect(page.locator("text=0.054")).toBeVisible();
+          await expect(page.locator("text=0.095")).toBeVisible();
+        }
+      }
+    ];
+
+    for (const r of routesToTest) {
+      consoleErrors.length = 0;
+      failedRequests.length = 0;
+
+      await page.goto(r.path, { waitUntil: "networkidle", timeout: 15000 });
+      await page.waitForTimeout(500);
+
+      // 1. Assert no "Failed to fetch" text anywhere in DOM
+      const bodyText = await page.innerText("body");
+      expect(bodyText).not.toContain("Failed to fetch");
+      expect(bodyText).not.toContain("net::ERR_CONNECTION_REFUSED");
+
+      // 2. Assert real data rendered
+      await r.assertContent();
+
+      // 3. Assert zero console errors & zero failed network requests
+      expect(consoleErrors, `Console errors detected on ${r.path}: ${consoleErrors.join("; ")}`).toHaveLength(0);
+      expect(failedRequests, `Failed network requests detected on ${r.path}: ${failedRequests.join("; ")}`).toHaveLength(0);
+    }
+  });
 });

@@ -1,0 +1,14 @@
+{
+  "name": "sunsync-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SunSync AI — Solar-Aware Industrial Machine Scheduling Decision Support System",
+  "scripts": {
+    "dev:all": "node scripts/dev.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "smoke:live": "python scripts/smoke_live.py",
+    "test:backend": "cd backend && pytest -v tests",
+    "test:frontend": "cd frontend && npx playwright test",
+    "build:frontend": "cd frontend && npm run build"
+  }
+}

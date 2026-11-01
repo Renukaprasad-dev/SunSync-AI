@@ -172,44 +172,50 @@ Run `supabase/verify_002.sql` in the Supabase SQL editor to confirm the function
 - Node.js 18+ (or 20+)
 - Git
 
-### Backend Setup
+### Quick Start (Recommended: One-Command Runner)
+SunSync AI includes a cross-platform orchestrator that launches the Python FastAPI backend, waits for `/health`, and launches the Next.js 14 frontend:
+
 ```bash
+# 1. Install frontend dependencies (if not already done):
+cd frontend && npm install && cd ..
+
+# 2. Run diagnostic health check:
+npm run doctor
+
+# 3. Start both backend and frontend together:
+npm run dev:all
+```
+Open `http://localhost:3000` to interact with the platform.
+
+---
+
+### Manual 2-Terminal Setup (Windows & POSIX)
+
+#### Terminal 1: Backend (FastAPI on Port 8000)
+```powershell
 cd backend
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1  # On Linux/macOS: source .venv/bin/activate
 
-# For production deployment / slim build (< 210 MB):
+# Install requirements (use requirements.txt for production, requirements-dev.txt for tests):
 pip install -r requirements.txt
 
-# For full local development (includes OR-Tools, XGBoost, and test suites):
-pip install -r requirements-dev.txt
-
-# Run backend unit & integration tests (50 tests passing):
-pytest tests/ -v
-
-# Start FastAPI dev server:
-uvicorn app.main:app --reload --port 8000
+# Start backend listening on all interfaces (avoids Windows IPv6 ::1 resolution mismatches):
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Interactive OpenAPI documentation is accessible at `http://localhost:8000/docs`.
+Open `http://localhost:8000/docs` to test Swagger OpenAPI documentation.
 
-### Frontend Setup
-```bash
+#### Terminal 2: Frontend (Next.js 14 on Port 3000)
+```powershell
 cd frontend
+copy .env.local.example .env.local  # On Linux/macOS: cp .env.local.example .env.local
 npm install
-
-# Type check:
-npx tsc --noEmit
-
-# Production build:
-npm run build
-
-# Start Next.js dev server:
 npm run dev
-
-# Run Playwright E2E test suite (18 tests passing):
-npx playwright test
 ```
-The application opens at `http://localhost:3000`.
+Open `http://localhost:3000` to access the application.
+
+> [!NOTE]
+> If you ever observe a "Cannot reach backend at http://localhost:8000" message in the UI, run `npm run doctor` to immediately diagnose whether port 8000 is running, whether your virtual environment is active, or whether CORS headers need updating.
 
 ---
 
