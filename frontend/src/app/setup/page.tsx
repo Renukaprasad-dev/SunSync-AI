@@ -242,21 +242,29 @@ export default function SetupPage() {
         </div>
       </div>
 
+      {saveSuccess && (
+        <div role="status" aria-live="polite" className="p-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs flex items-center gap-2">
+          <Check className="w-4 h-4 shrink-0 text-emerald-400" />
+          <span>{durable ? "Configuration saved successfully." : "Configuration saved (temporary demo memory)."}</span>
+        </div>
+      )}
+
       {!durable && (
-        <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs flex items-center gap-2">
+        <div role="status" aria-live="polite" className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
           <span>Demo mode (ephemeral memory): changes may reset at any time across serverless instances. Connect Supabase for persistent multi-user storage.</span>
         </div>
       )}
 
       {conflictError && (
-        <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs flex items-center justify-between gap-2">
+        <div role="alert" aria-live="assertive" className="p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
             <span>Conflict: Configuration has been modified by another session. Please reload to avoid overwriting changes.</span>
           </div>
           <button
             onClick={() => loadData()}
+            aria-label="Reload latest configuration from database"
             className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded font-semibold text-[11px] shrink-0"
           >
             Reload Latest
@@ -265,7 +273,7 @@ export default function SetupPage() {
       )}
 
       {validationError && (
-        <div className="p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs flex items-center gap-2">
+        <div role="alert" aria-live="assertive" className="p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{validationError}</span>
         </div>
@@ -437,8 +445,9 @@ export default function SetupPage() {
                     <button
                       type="button"
                       onClick={() => handleDeleteMachine(m.id)}
-                      className="text-slate-500 hover:text-rose-400 p-1 transition-colors"
-                      title="Delete machine"
+                      className="text-slate-500 hover:text-rose-400 p-1 transition-colors focus:ring-2 focus:ring-rose-400 rounded"
+                      title={`Delete machine ${m.name}`}
+                      aria-label={`Delete machine ${m.name}`}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>

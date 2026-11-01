@@ -12,3 +12,23 @@ body {
   background: var(--background);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
+
+/* Accessibility: WCAG AA Compliant High-Contrast Focus Rings */
+:focus-visible {
+  outline: 2px solid #10b981;
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid #10b981 !important;
+  outline-offset: 2px !important;
+}
+
+/* WCAG Contrast adjustments for muted text */
+.text-slate-500 {
+  color: #94a3b8 !important; /* Raised from #64748b to #94a3b8 for 4.5:1+ contrast on dark background */
+}

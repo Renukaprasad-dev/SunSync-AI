@@ -381,8 +381,9 @@ export function TariffEditor({ tariff, onChange }: TariffEditorProps) {
                         type="button"
                         onClick={() => handleDeleteSlab(idx)}
                         disabled={slabs.length <= 1}
-                        className="p-1 text-slate-500 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:hover:text-slate-500"
-                        title="Delete slab"
+                        className="p-1 text-slate-500 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:hover:text-slate-500 focus:ring-2 focus:ring-rose-400 rounded"
+                        title={`Delete slab ${slab.startTime} to ${slab.endTime}`}
+                        aria-label={`Delete slab ${slab.startTime} to ${slab.endTime}`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
