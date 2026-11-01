@@ -11,14 +11,15 @@ import { slotToTime } from "@/lib/utils";
 export default function ForecastPage() {
   const [data, setData] = useState<ForecastResponse | null>(null);
   const [scenario, setScenario] = useState<string>("sunny");
+  const [weatherSource, setWeatherSource] = useState<"simulated" | "live">("simulated");
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchForecastData = async (scen: string) => {
+  const fetchForecastData = async (scen: string, src: "simulated" | "live" = weatherSource) => {
     setLoading(true);
     setError(null);
     try {
-      const resp = await getForecast(scen);
+      const resp = await getForecast(scen, src);
       setData(resp);
     } catch (e: any) {
       setError(e?.message || "Failed to fetch XGBoost forecast.");
@@ -28,8 +29,8 @@ export default function ForecastPage() {
   };
 
   useEffect(() => {
-    fetchForecastData(scenario);
-  }, [scenario]);
+    fetchForecastData(scenario, weatherSource);
+  }, [scenario, weatherSource]);
 
   const xLabels = Array.from({ length: 96 }, (_, i) => slotToTime(i));
 
@@ -172,11 +173,43 @@ export default function ForecastPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Weather Input Source Toggle */}
+          <div className="flex items-center rounded-lg bg-slate-900 border border-slate-800 p-0.5">
+            <button
+              type="button"
+              onClick={() => setWeatherSource("simulated")}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
+                weatherSource === "simulated"
+                  ? "bg-slate-800 text-white shadow-sm"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Simulated Sky
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeatherSource("live")}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                weatherSource === "live"
+                  ? "bg-emerald-600 text-white shadow-sm font-bold"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${weatherSource === "live" ? "bg-white animate-pulse" : "bg-emerald-400"}`}></span>
+              Live Open-Meteo
+            </button>
+          </div>
+
           <select
             value={scenario}
             onChange={(e) => setScenario(e.target.value)}
-            className="bg-slate-900 border border-slate-700 text-xs font-semibold text-white rounded-lg px-3 py-1.5 focus:border-amber-500"
+            disabled={weatherSource === "live"}
+            className={`border text-xs font-semibold rounded-lg px-3 py-1.5 focus:border-amber-500 ${
+              weatherSource === "live"
+                ? "bg-slate-900/50 border-slate-800 text-slate-500 cursor-not-allowed"
+                : "bg-slate-900 border-slate-700 text-white"
+            }`}
           >
             <option value="sunny">Sunny Scenario</option>
             <option value="partly_cloudy">Partly Cloudy Scenario</option>
@@ -184,13 +217,32 @@ export default function ForecastPage() {
           </select>
 
           <button
-            onClick={() => fetchForecastData(scenario)}
+            onClick={() => fetchForecastData(scenario, weatherSource)}
             className="p-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white"
             title="Refresh forecast"
+            aria-label="Refresh forecast data"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
+      </div>
+
+      {/* Live / Simulated Source Status Banner */}
+      <div className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${
+        data?.source === "live"
+          ? "bg-emerald-950/30 border-emerald-700/50 text-emerald-200"
+          : "bg-slate-900/60 border-slate-800 text-slate-300"
+      }`}>
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${data?.source === "live" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`}></span>
+          <span className="font-semibold text-white">Source:</span>
+          <span>{data?.source_label || (weatherSource === "live" ? "Live Open-Meteo API (Bengaluru)" : "Simulated Clear Sky")}</span>
+        </div>
+        {data?.timestamp && (
+          <div className="text-[11px] text-slate-400 font-mono">
+            Observation Time: {data.timestamp}
+          </div>
+        )}
       </div>
 
       {loading && !data && (

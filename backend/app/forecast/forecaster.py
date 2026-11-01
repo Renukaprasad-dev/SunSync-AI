@@ -114,9 +114,29 @@ class SolarAndLoadForecaster:
             pass
         return None
 
-    def predict_day(self, scenario: str = "sunny") -> Dict[str, Any]:
+    def predict_day(
+        self,
+        scenario: str = "sunny",
+        source: str = "simulated",
+        lat: float = 12.9716,
+        lon: float = 77.5946
+    ) -> Dict[str, Any]:
         """Generates 96-slot forecast for solar generation and factory base load."""
-        weather = self.fetch_open_meteo_weather()
+        from datetime import datetime, timezone
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        weather = None
+        source_label = "Simulated Clear Sky"
+        is_live = False
+
+        if source == "live":
+            weather = self.fetch_open_meteo_weather(lat=lat, lon=lon)
+            if weather:
+                is_live = True
+                source_label = f"Live Open-Meteo Weather (Bengaluru [{lat:.4f}, {lon:.4f}])"
+            else:
+                source_label = "Simulated Fallback (Open-Meteo unreachable)"
+
         if not weather:
             if scenario == "overcast":
                 weather = {"cloud_cover": [85.0] * 96, "temperature_c": [23.5] * 96}
@@ -124,6 +144,8 @@ class SolarAndLoadForecaster:
                 weather = {"cloud_cover": [45.0] * 96, "temperature_c": [26.0] * 96}
             else:
                 weather = {"cloud_cover": [10.0] * 96, "temperature_c": [29.0] * 96}
+            if source != "live":
+                source_label = f"Simulated {scenario.replace('_', ' ').title()} Sky Profile"
 
         feature_rows = []
         for slot in range(96):
@@ -161,6 +183,9 @@ class SolarAndLoadForecaster:
 
         return {
             "scenario": scenario,
+            "source": "live" if is_live else "simulated",
+            "source_label": source_label,
+            "timestamp": timestamp,
             "solar_forecast": solar_pred,
             "load_forecast": load_pred,
             "weather": weather,

@@ -184,6 +184,9 @@ export interface BillRealityCheckResponse {
 
 export interface ForecastResponse {
   scenario: string;
+  source?: "simulated" | "live";
+  source_label?: string;
+  timestamp?: string;
   solar_forecast: number[];
   load_forecast: number[];
   weather?: {

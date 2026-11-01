@@ -225,8 +225,11 @@ export async function runSimulation(payload: {
   });
 }
 
-export async function getForecast(scenario: string = "sunny"): Promise<ForecastResponse> {
-  return fetchWithFallback<ForecastResponse>(`/forecast?scenario=${scenario}`);
+export async function getForecast(
+  scenario: string = "sunny",
+  source: string = "simulated"
+): Promise<ForecastResponse> {
+  return fetchWithFallback<ForecastResponse>(`/forecast?scenario=${encodeURIComponent(scenario)}&source=${encodeURIComponent(source)}`);
 }
 
 export async function getOptimizationRuns(siteId?: string): Promise<OptimizationRunSummary[]> {
