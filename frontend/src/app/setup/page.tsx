@@ -13,6 +13,7 @@ export default function SetupPage() {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [tariff, setTariff] = useState<Tariff | null>(null);
   const [pMax, setPMax] = useState<number>(25.0);
+  const [emissionFactor, setEmissionFactor] = useState<number>(0.82);
   const [version, setVersion] = useState<number>(1);
   const [durable, setDurable] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
@@ -26,8 +27,8 @@ export default function SetupPage() {
 
   const isDirty = useMemo(() => {
     if (!initialSnapshot) return false;
-    return JSON.stringify({ pMax, machines, tariff }) !== initialSnapshot;
-  }, [pMax, machines, tariff, initialSnapshot]);
+    return JSON.stringify({ pMax, emissionFactor, machines, tariff }) !== initialSnapshot;
+  }, [pMax, emissionFactor, machines, tariff, initialSnapshot]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -42,11 +43,13 @@ export default function SetupPage() {
       setDurable(healthObj.durable);
       setSite(configObj.site);
       setPMax(configObj.site.p_max_grid_kw ?? 25.0);
+      setEmissionFactor(configObj.site.grid_emission_factor_kg_per_kwh ?? 0.82);
       setMachines(configObj.machines);
       setTariff(configObj.tariff);
       setVersion(configObj.version || 1);
       setInitialSnapshot(JSON.stringify({
         pMax: configObj.site.p_max_grid_kw ?? 25.0,
+        emissionFactor: configObj.site.grid_emission_factor_kg_per_kwh ?? 0.82,
         machines: configObj.machines,
         tariff: configObj.tariff
       }));
@@ -144,7 +147,10 @@ export default function SetupPage() {
     try {
       const siteId = site?.id || "00000000-0000-0000-0000-000000000001";
       const savedConfig = await updateSiteConfig(siteId, {
-        site: { p_max_grid_kw: pMax },
+        site: { 
+          p_max_grid_kw: pMax,
+          grid_emission_factor_kg_per_kwh: emissionFactor
+        },
         machines,
         tariff: tariff!,
         expected_version: version
@@ -152,11 +158,13 @@ export default function SetupPage() {
 
       setSite(savedConfig.site);
       setPMax(savedConfig.site.p_max_grid_kw);
+      setEmissionFactor(savedConfig.site.grid_emission_factor_kg_per_kwh ?? 0.82);
       setMachines(savedConfig.machines);
       setTariff(savedConfig.tariff);
       setVersion(savedConfig.version);
       setInitialSnapshot(JSON.stringify({
         pMax: savedConfig.site.p_max_grid_kw,
+        emissionFactor: savedConfig.site.grid_emission_factor_kg_per_kwh ?? 0.82,
         machines: savedConfig.machines,
         tariff: savedConfig.tariff
       }));
@@ -280,7 +288,7 @@ export default function SetupPage() {
       )}
 
       {/* Global Limits Card */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
         <div>
           <label className="text-xs font-semibold text-slate-400 block mb-1">Max Factory Grid Limit P_max (kW)</label>
           <input
@@ -310,6 +318,20 @@ export default function SetupPage() {
             className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-1.5 text-xs text-white"
           />
           <span className="text-[11px] text-slate-500 mt-1 block">Penalty rate per kW of peak demand.</span>
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-400 block mb-1">Grid CO2 Factor (kg/kWh)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="2.0"
+            value={emissionFactor}
+            onChange={(e) => setEmissionFactor(parseFloat(e.target.value) || 0.82)}
+            className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-1.5 text-xs text-white"
+          />
+          <span className="text-[11px] text-slate-500 mt-1 block">India grid factor (default 0.82 kg/kWh).</span>
         </div>
 
         <div>

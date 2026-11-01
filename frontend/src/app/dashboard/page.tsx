@@ -129,7 +129,19 @@ export default function DashboardPage() {
   const downloadCSV = () => {
     if (!data || !data.strategies[selectedStrategy]) return;
     const strat = data.strategies[selectedStrategy]!;
+    const emissionFactor = strat.kpis.grid_emission_factor_kg_per_kwh || 0.82;
+    const avoidedCo2 = strat.kpis.avoided_co2_kg ?? Number((strat.kpis.solar_energy_used_kwh * emissionFactor).toFixed(2));
     const rows = [
+      ["# SunSync AI Industrial Schedule Export"],
+      ["# Strategy", strat.display_title],
+      ["# Daily Electricity Cost (INR)", strat.kpis.daily_cost_rs.toString()],
+      ["# Peak Grid Demand (kW)", strat.kpis.peak_grid_demand_kw.toString()],
+      ["# Solar Energy Consumed (kWh)", strat.kpis.solar_energy_used_kwh.toString()],
+      ["# Net Grid Energy Imported (kWh)", strat.kpis.grid_energy_imported_kwh.toString()],
+      ["# Estimated CO2 Avoided (kg)", avoidedCo2.toString()],
+      ["# Grid Emission Factor (kg CO2/kWh)", emissionFactor.toString()],
+      ["# Environmental Disclaimer", `Estimated CO2 avoided based on ${emissionFactor} kg/kWh grid factor`],
+      [],
       ["Machine ID", "Machine Name", "Power (kW)", "Start Time", "End Time", "Duration (Hours)", "Energy (kWh)", "Flexible", "Reason"]
     ];
 
@@ -147,14 +159,16 @@ export default function DashboardPage() {
       ]);
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," + rows.map((e) => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
+    const csvString = rows.map((e) => e.join(",")).join("\n");
+    const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+    const blobUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", blobUrl);
     link.setAttribute("download", `SunSync_${selectedStrategy}_schedule.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
   };
 
   if (loading) {
@@ -320,7 +334,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 w-full sm:w-auto">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 w-full sm:w-auto">
             <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
               <div className="text-[10px] text-slate-400 uppercase font-semibold">Cost Savings</div>
               <div className={`text-sm font-extrabold ${costDelta <= 0 ? "text-emerald-400" : "text-rose-400"}`}>
@@ -335,11 +349,21 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="col-span-2 sm:col-span-1 bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
+            <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
               <div className="text-[10px] text-slate-400 uppercase font-semibold">Solar Utilized</div>
               <div className="text-sm font-extrabold text-amber-400">
                 {currKpi.solar_self_consumption_pct}%
                 <span className="text-[11px] font-normal text-slate-400 ml-1">({currKpi.solar_energy_used_kwh} kWh)</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
+              <div className="text-[10px] text-slate-400 uppercase font-semibold">Avoided CO2</div>
+              <div className="text-sm font-extrabold text-emerald-400">
+                {currKpi.avoided_co2_kg ?? (currKpi.solar_energy_used_kwh * 0.82).toFixed(1)} kg
+              </div>
+              <div className="text-[9px] text-slate-400 font-normal leading-tight mt-0.5">
+                Estimated CO2 avoided based on {currKpi.grid_emission_factor_kg_per_kwh || 0.82} kg/kWh grid factor
               </div>
             </div>
           </div>
@@ -426,7 +450,7 @@ export default function DashboardPage() {
           baseValue={`${baseKpi.grid_energy_imported_kwh} kWh`}
           deltaText={selectedStrategy !== "baseline" ? `${(currKpi.grid_energy_imported_kwh - baseKpi.grid_energy_imported_kwh).toFixed(1)} kWh` : undefined}
           isPositiveBenefit={currKpi.grid_energy_imported_kwh <= baseKpi.grid_energy_imported_kwh}
-          subtext={`CO2: ${currKpi.estimated_co2_kg} kg`}
+          subtext={`Avoided: ${currKpi.avoided_co2_kg ?? (currKpi.solar_energy_used_kwh * 0.82).toFixed(1)} kg CO2 | Grid: ${currKpi.estimated_co2_kg} kg`}
         />
 
         <div className="col-span-2 md:col-span-1">

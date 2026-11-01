@@ -94,6 +94,8 @@ export interface StrategyKPIs {
   solar_coverage_pct: number;
   deadline_violations: number;
   estimated_co2_kg: number;
+  avoided_co2_kg?: number;
+  grid_emission_factor_kg_per_kwh?: number;
 }
 
 export interface StrategySchedule {

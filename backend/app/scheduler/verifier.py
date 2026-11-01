@@ -105,6 +105,7 @@ class ScheduleVerifier:
         self_consumption_pct = (solar_used_kwh / total_solar_generated_kwh * 100.0) if total_solar_generated_kwh > 0 else 0.0
         solar_coverage_pct = (solar_used_kwh / total_factory_kwh * 100.0) if total_factory_kwh > 0 else 0.0
         estimated_co2 = grid_imported_kwh * emission_factor_kg_per_kwh
+        avoided_co2 = solar_used_kwh * emission_factor_kg_per_kwh
 
         kpis = StrategyKPIs(
             daily_cost_rs=round(total_daily_cost, 2),
@@ -115,7 +116,9 @@ class ScheduleVerifier:
             solar_self_consumption_pct=round(self_consumption_pct, 1),
             solar_coverage_pct=round(solar_coverage_pct, 1),
             deadline_violations=violations,
-            estimated_co2_kg=round(estimated_co2, 2)
+            estimated_co2_kg=round(estimated_co2, 2),
+            avoided_co2_kg=round(avoided_co2, 2),
+            grid_emission_factor_kg_per_kwh=round(emission_factor_kg_per_kwh, 4)
         )
 
         return kpis, load_profile, grid_profile, solar_used_profile, machine_results, notes

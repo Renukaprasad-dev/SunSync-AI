@@ -106,6 +106,8 @@ class StrategyKPIs(BaseModel):
     solar_coverage_pct: float
     deadline_violations: int = 0
     estimated_co2_kg: float = 0.0
+    avoided_co2_kg: float = 0.0
+    grid_emission_factor_kg_per_kwh: float = 0.82
 
 class StrategySchedule(BaseModel):
     strategy_name: str # "baseline", "solar_aware", "cost_optimized"
