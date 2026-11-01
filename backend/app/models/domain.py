@@ -136,6 +136,7 @@ class OptimizationResponse(BaseModel):
     site_id: Optional[str]
     scenario: str
     timestamp: str
+    run_id: Optional[str] = None
     disclaimer: str = (
         "Based on simulated data and mathematical optimization models. "
         "Validate against official utility tariff orders and real utility bills before operational reliance."
@@ -143,3 +144,27 @@ class OptimizationResponse(BaseModel):
     strategies: Dict[str, StrategySchedule]
     machine_reasons: Dict[str, str] = {}
     infeasibility_diagnosis: Optional[str] = None
+
+class OptimizationRunSummary(BaseModel):
+    id: str
+    site_id: str
+    scenario: str
+    solver_name: str
+    status: str
+    solver_duration_ms: int
+    verifier_passed: bool
+    created_at: str
+    summary: Dict[str, Any]
+
+class OptimizationRunDetail(BaseModel):
+    id: str
+    site_id: str
+    scenario: str
+    solver_name: str
+    status: str
+    solver_duration_ms: int
+    verifier_passed: bool
+    created_at: str
+    inputs: Dict[str, Any]
+    results: Dict[str, Any]
+    summary: Dict[str, Any]

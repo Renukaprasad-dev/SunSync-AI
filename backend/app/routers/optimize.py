@@ -1,3 +1,6 @@
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -5,6 +8,8 @@ from pydantic import BaseModel, Field
 from app.models.domain import (
     OptimizationRequest,
     OptimizationResponse,
+    OptimizationRunSummary,
+    OptimizationRunDetail,
     Machine,
     Tariff,
     SolarProfile
@@ -54,8 +59,75 @@ def run_optimization(payload: OptimizeEndpointPayload, request: Request = None):
         strategies=payload.strategies
     )
 
+    start_time = time.time()
     try:
         response = scheduler_service.run_optimization(req)
+        duration_ms = max(1, int((time.time() - start_time) * 1000))
+        run_id = str(uuid.uuid4())
+        response.run_id = run_id
+
+        # Compute summary metrics for history
+        baseline = response.strategies.get("baseline")
+        cost_opt = response.strategies.get("cost_optimized")
+        b_kpi = baseline.kpis if baseline else None
+        c_kpi = cost_opt.kpis if cost_opt else None
+
+        b_cost = b_kpi.daily_cost_rs if b_kpi else 0.0
+        c_cost = c_kpi.daily_cost_rs if c_kpi else 0.0
+        savings_pct = round(((b_cost - c_cost) / b_cost * 100.0), 2) if b_cost > 0 else 0.0
+
+        summary = {
+            "baseline_cost": round(b_cost, 2),
+            "optimized_cost": round(c_cost, 2),
+            "savings_pct": savings_pct,
+            "baseline_peak_kw": round(b_kpi.peak_grid_demand_kw, 2) if b_kpi else 0.0,
+            "optimized_peak_kw": round(c_kpi.peak_grid_demand_kw, 2) if c_kpi else 0.0,
+            "deadline_violations": c_kpi.deadline_violations if c_kpi else 0
+        }
+
+        verifier_passed = all(s.verifier_passed for s in response.strategies.values()) if response.strategies else True
+        status_str = "SUCCESS" if verifier_passed else "INFEASIBLE"
+
+        visitor_id = get_visitor_session_id(request) if request else "anon"
+        run_record = {
+            "id": run_id,
+            "site_id": site_id,
+            "visitor_id": visitor_id,
+            "scenario": payload.scenario,
+            "solver_name": "HiGHS / SciPy" if "scipy" in str(getattr(scheduler_service, "solver_type", "")).lower() else "OR-Tools CBC/SCIP",
+            "status": status_str,
+            "solver_duration_ms": duration_ms,
+            "verifier_passed": verifier_passed,
+            "summary": summary,
+            "inputs": {
+                "site_id": site_id,
+                "scenario": payload.scenario,
+                "p_max_grid_kw": p_max,
+                "machines": [m.model_dump() for m in machines],
+                "tariff": tariff.model_dump()
+            },
+            "results": response.model_dump(),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        repo.save_optimization_run(run_record)
+
         return response
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
+
+@router.get("/runs", response_model=List[OptimizationRunSummary])
+@router.get("/optimization/runs", response_model=List[OptimizationRunSummary])
+def list_runs(site_id: Optional[str] = None, request: Request = None):
+    visitor_id = get_visitor_session_id(request) if request else None
+    return repo.list_optimization_runs(site_id=site_id, visitor_id=visitor_id)
+
+@router.get("/runs/{run_id}", response_model=OptimizationRunDetail)
+@router.get("/optimization/runs/{run_id}", response_model=OptimizationRunDetail)
+def get_run(run_id: str, request: Request = None):
+    visitor_id = get_visitor_session_id(request) if request else None
+    run = repo.get_optimization_run(run_id=run_id, visitor_id=visitor_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Optimization run {run_id} not found.")
+    return run

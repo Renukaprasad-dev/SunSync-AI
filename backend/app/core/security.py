@@ -6,7 +6,11 @@ from fastapi import Request, HTTPException
 
 def get_visitor_session_id(request: Request) -> str:
     """Retrieves or validates anonymous visitor session UUID from header or cookie."""
-    header_val = request.headers.get("X-Visitor-Session-Id") or request.cookies.get("sunsync_session_id")
+    header_val = (
+        request.headers.get("X-Visitor-Session-Id")
+        or request.headers.get("X-Visitor-Id")
+        or request.cookies.get("sunsync_session_id")
+    )
     if header_val:
         try:
             uuid.UUID(str(header_val))

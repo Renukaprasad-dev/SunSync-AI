@@ -11,10 +11,11 @@ import {
   Flame, 
   Calendar,
   Layers,
-  ArrowRight
+  ArrowRight,
+  History
 } from "lucide-react";
 
-import { runOptimization } from "@/lib/api";
+import { runOptimization, getOptimizationRun } from "@/lib/api";
 import { OptimizationResponse, StrategySchedule } from "@/lib/types";
 import { KPICard, DeadlineViolationsCard } from "@/components/kpi-card";
 import { LoadDispatchChart } from "@/components/charts/load-dispatch-chart";
@@ -28,6 +29,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState<"cost_optimized" | "solar_aware" | "baseline">("cost_optimized");
+  const [isReopened, setIsReopened] = useState<boolean>(false);
+  const [reopenedMeta, setReopenedMeta] = useState<{ id?: string; created_at?: string; scenario?: string; solver_name?: string } | null>(null);
 
   const fetchOptimization = async () => {
     setLoading(true);
@@ -46,6 +49,45 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const runId = params.get("runId");
+      const reopened = params.get("reopened");
+
+      if (reopened && runId) {
+        const cached = sessionStorage.getItem("sunsync_reopened_run");
+        const cachedMeta = sessionStorage.getItem("sunsync_reopened_meta");
+        if (cached) {
+          try {
+            setData(JSON.parse(cached));
+            setIsReopened(true);
+            if (cachedMeta) setReopenedMeta(JSON.parse(cachedMeta));
+            setLoading(false);
+            return;
+          } catch {
+            // fallback to fetch
+          }
+        }
+        getOptimizationRun(runId)
+          .then((res) => {
+            setData(res.results);
+            setIsReopened(true);
+            setReopenedMeta({
+              id: res.id,
+              created_at: res.created_at,
+              scenario: res.scenario,
+              solver_name: res.solver_name
+            });
+          })
+          .catch(() => {
+            fetchOptimization();
+          })
+          .finally(() => {
+            setLoading(false);
+          });
+        return;
+      }
+    }
     fetchOptimization();
   }, []);
 
@@ -123,6 +165,42 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6 py-2">
       <SimulationDisclaimer />
+
+      {isReopened && (
+        <div className="bg-amber-950/40 border border-amber-600/40 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-200">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-500/20 text-amber-400 rounded-lg shrink-0">
+              <History className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider text-amber-400">Viewing Historical Replay</div>
+              <div className="text-sm text-slate-200">
+                Showing saved solver run <span className="font-mono text-amber-300 font-semibold">#{reopenedMeta?.id ? reopenedMeta.id.slice(0, 8) : "Archived"}</span>
+                {reopenedMeta?.created_at && ` logged at ${new Date(reopenedMeta.created_at).toLocaleString()}`}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              if (typeof window !== "undefined") {
+                sessionStorage.removeItem("sunsync_reopened_run");
+                sessionStorage.removeItem("sunsync_reopened_meta");
+                const url = new URL(window.location.href);
+                url.searchParams.delete("reopened");
+                url.searchParams.delete("runId");
+                window.history.replaceState({}, "", url.pathname);
+              }
+              setIsReopened(false);
+              setReopenedMeta(null);
+              fetchOptimization();
+            }}
+            className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs rounded-lg transition-colors shrink-0"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+            Exit Replay & Run Live Optimization
+          </button>
+        </div>
+      )}
 
       {/* Header & Controls */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-800">

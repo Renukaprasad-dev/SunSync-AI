@@ -364,4 +364,32 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     // Validate machine data rows
     expect(csvContent).toContain("CNC Milling Center");
   });
+
+  test("15. Run History lists past solver runs and reopens historical replay in Dashboard", async ({ page }) => {
+    // 1. Visit History page
+    await page.goto("/history");
+    await expect(page.locator("text=Optimization Run History")).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("text=Logged Solver Runs")).toBeVisible({ timeout: 10000 });
+
+    // 2. Verify runs are listed with verifier status
+    await expect(page.locator("text=PASS").first()).toBeVisible({ timeout: 5000 });
+
+    // 3. Click Reopen button on the first historical run
+    const reopenBtn = page.getByRole("button", { name: /Reopen/i }).first();
+    await expect(reopenBtn).toBeVisible();
+    await reopenBtn.click();
+
+    // 4. Verify redirected to dashboard in replay mode
+    await expect(page).toHaveURL(/.*dashboard\?reopened=true.*/);
+    await expect(page.locator("text=Viewing Historical Replay")).toBeVisible({ timeout: 10000 });
+
+    // 5. Exit replay mode
+    const exitBtn = page.getByRole("button", { name: /Exit Replay & Run Live Optimization/i });
+    await expect(exitBtn).toBeVisible();
+    await exitBtn.click();
+
+    // Verify replay banner exits and returns to live mode
+    await expect(page.locator("text=Viewing Historical Replay")).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Live MILP Optimal")).toBeVisible();
+  });
 });

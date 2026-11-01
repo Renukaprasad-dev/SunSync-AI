@@ -1,4 +1,4 @@
-import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse, SiteConfigPayload, SiteConfigResponse } from "./types";
+import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse, SiteConfigPayload, SiteConfigResponse, OptimizationRunSummary, OptimizationRunDetail } from "./types";
 import { slotToTime } from "./utils";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -347,4 +347,13 @@ export async function runSimulation(payload: {
 
 export async function getForecast(scenario: string = "sunny"): Promise<ForecastResponse> {
   return fetchWithFallback<ForecastResponse>(`/forecast?scenario=${scenario}`);
+}
+
+export async function getOptimizationRuns(siteId?: string): Promise<OptimizationRunSummary[]> {
+  const query = siteId ? `?site_id=${encodeURIComponent(siteId)}` : "";
+  return fetchWithFallback<OptimizationRunSummary[]>(`/runs${query}`);
+}
+
+export async function getOptimizationRun(runId: string): Promise<OptimizationRunDetail> {
+  return fetchWithFallback<OptimizationRunDetail>(`/runs/${runId}`);
 }

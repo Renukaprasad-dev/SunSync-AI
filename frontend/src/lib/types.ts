@@ -116,6 +116,7 @@ export interface OptimizationResponse {
   site_id?: string;
   scenario: string;
   timestamp: string;
+  run_id?: string;
   disclaimer: string;
   strategies: {
     baseline?: StrategySchedule;
@@ -125,6 +126,30 @@ export interface OptimizationResponse {
   };
   machine_reasons: Record<string, string>;
   infeasibility_diagnosis?: string;
+}
+
+export interface OptimizationRunSummary {
+  id: string;
+  site_id: string;
+  scenario: string;
+  solver_name: string;
+  status: string;
+  solver_duration_ms: number;
+  verifier_passed: boolean;
+  created_at: string;
+  summary: {
+    baseline_cost: number;
+    optimized_cost: number;
+    savings_pct: number;
+    baseline_peak_kw: number;
+    optimized_peak_kw: number;
+    deadline_violations: number;
+  };
+}
+
+export interface OptimizationRunDetail extends OptimizationRunSummary {
+  inputs: Record<string, any>;
+  results: OptimizationResponse;
 }
 
 export interface ForecastResponse {

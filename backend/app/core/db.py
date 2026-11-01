@@ -208,6 +208,37 @@ class DataRepository:
         # Base Load
         self._base_loads[demo_site_id] = [0.8 if (i < 32 or i >= 76) else 1.5 for i in range(96)]
 
+        # Initial Demo Optimization Runs
+        self._optimization_runs = [
+            {
+                "id": "20000000-0000-0000-0000-000000000001",
+                "site_id": demo_site_id,
+                "visitor_id": "demo",
+                "scenario": "sunny",
+                "solver_name": "HiGHS / SciPy MILP",
+                "status": "SUCCESS",
+                "solver_duration_ms": 115,
+                "verifier_passed": True,
+                "created_at": "2026-11-01T09:30:00Z",
+                "summary": {
+                    "baseline_cost": 593.42,
+                    "optimized_cost": 481.18,
+                    "savings_pct": 18.91,
+                    "baseline_peak_kw": 18.5,
+                    "optimized_peak_kw": 14.0,
+                    "deadline_violations": 0
+                },
+                "inputs": {"site_id": demo_site_id, "scenario": "sunny"},
+                "results": {
+                    "site_id": demo_site_id,
+                    "scenario": "sunny",
+                    "timestamp": "2026-11-01T09:30:00Z",
+                    "strategies": {},
+                    "disclaimer": "Based on simulated data and mathematical optimization models. Validate against official utility tariff orders and real utility bills before operational reliance."
+                }
+            }
+        ]
+
     def _load_local_store(self):
         """Loads locally persisted store if available."""
         if LOCAL_STORE_PATH.exists():
@@ -222,6 +253,8 @@ class DataRepository:
                 if "tariffs" in data:
                     for s_id, t_dict in data["tariffs"].items():
                         self._tariffs[s_id] = Tariff(**t_dict)
+                if "optimization_runs" in data:
+                    self._optimization_runs = data["optimization_runs"]
                 logger.info(f"Loaded locally persisted configuration from {LOCAL_STORE_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to read local store ({e}); using initial demo seed.")
@@ -238,7 +271,8 @@ class DataRepository:
                 serializable = {
                     "sites": self._sites,
                     "machines": {s_id: [m.model_dump() for m in m_list] for s_id, m_list in self._machines.items()},
-                    "tariffs": {s_id: t.model_dump() for s_id, t in self._tariffs.items()}
+                    "tariffs": {s_id: t.model_dump() for s_id, t in self._tariffs.items()},
+                    "optimization_runs": self._optimization_runs[:100]
                 }
                 tmp_path = LOCAL_STORE_PATH.with_suffix(".tmp")
                 with open(tmp_path, "w", encoding="utf-8") as f:
@@ -584,6 +618,137 @@ class DataRepository:
             except Exception as e:
                 logger.warning(f"Supabase get_base_load failed ({e}); falling back to local store.")
         return self._base_loads.get(site_id) or self._base_loads["00000000-0000-0000-0000-000000000001"]
+
+    # 5. Optimization Runs (History & Sandbox Scoping)
+    def save_optimization_run(self, run_record: Dict[str, Any]) -> Dict[str, Any]:
+        """Saves an optimization run to in-memory/local store and Supabase if configured."""
+        with self._lock:
+            # Prepend so newest runs appear first
+            self._optimization_runs.insert(0, run_record)
+            if len(self._optimization_runs) > 200:
+                self._optimization_runs = self._optimization_runs[:200]
+            self._save_local_store()
+
+        if self.is_supabase_enabled:
+            try:
+                headers = self._get_supabase_headers()
+                url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/optimization_runs"
+                payload = {
+                    "id": run_record["id"],
+                    "site_id": run_record["site_id"],
+                    "scenario": run_record["scenario"],
+                    "solver_name": run_record.get("solver_name", "HiGHS / SciPy"),
+                    "inputs": run_record.get("inputs", {}),
+                    "results": run_record.get("results", {}),
+                    "status": run_record.get("status", "SUCCESS"),
+                    "solver_duration_ms": int(run_record.get("solver_duration_ms", 100)),
+                    "verifier_passed": bool(run_record.get("verifier_passed", True)),
+                    "created_at": run_record.get("created_at")
+                }
+                resp = httpx.post(url, headers=headers, json=payload, timeout=3.0)
+                if resp.status_code not in (200, 201):
+                    logger.warning(f"Supabase save optimization_run returned {resp.status_code}: {resp.text}")
+            except Exception as e:
+                logger.warning(f"Supabase save optimization_run failed: {e}")
+
+        return run_record
+
+    def list_optimization_runs(
+        self,
+        site_id: Optional[str] = None,
+        visitor_id: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Lists past optimization runs.
+        Enforces visitor sandbox scoping:
+        - Visitors can view runs on the shared demo site.
+        - Visitors can view their own sandbox runs.
+        - Visitors CANNOT view runs of another visitor's private sandbox site.
+        """
+        filtered = []
+        with self._lock:
+            runs_copy = list(self._optimization_runs)
+
+        for run in runs_copy:
+            run_site_id = run.get("site_id")
+            run_visitor_id = run.get("visitor_id")
+
+            # Check if this run belongs to another visitor's private sandbox site
+            site = self.get_site(run_site_id) if run_site_id else None
+            site_owner = site.get("owner_session_id") if site else None
+
+            if site_owner and visitor_id and site_owner != visitor_id:
+                # Private to another visitor -> skip
+                continue
+
+            if site_id and run_site_id != site_id:
+                continue
+
+            if visitor_id and run_visitor_id and run_visitor_id != visitor_id and run_site_id != self.DEMO_SITE_ID:
+                continue
+
+            # Produce summary item
+            summary = run.get("summary") or {}
+            filtered.append({
+                "id": run.get("id"),
+                "site_id": run_site_id,
+                "scenario": run.get("scenario", "sunny"),
+                "solver_name": run.get("solver_name", "HiGHS / SciPy"),
+                "status": run.get("status", "SUCCESS"),
+                "solver_duration_ms": run.get("solver_duration_ms", 0),
+                "verifier_passed": run.get("verifier_passed", True),
+                "created_at": run.get("created_at", ""),
+                "summary": summary
+            })
+            if len(filtered) >= limit:
+                break
+
+        return filtered
+
+    def get_optimization_run(self, run_id: str, visitor_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Retrieves a specific run by ID with full inputs and results.
+        Enforces visitor sandbox scoping (403 Forbidden on cross-visitor sandbox runs).
+        """
+        with self._lock:
+            run = next((r for r in self._optimization_runs if r.get("id") == run_id), None)
+
+        if not run and self.is_supabase_enabled:
+            try:
+                headers = self._get_supabase_headers()
+                url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/optimization_runs?id=eq.{run_id}&select=*"
+                resp = httpx.get(url, headers=headers, timeout=3.0)
+                if resp.status_code == 200 and resp.json():
+                    row = resp.json()[0]
+                    run = {
+                        "id": row["id"],
+                        "site_id": row["site_id"],
+                        "scenario": row["scenario"],
+                        "solver_name": row["solver_name"],
+                        "status": row["status"],
+                        "solver_duration_ms": row["solver_duration_ms"],
+                        "verifier_passed": row["verifier_passed"],
+                        "created_at": row["created_at"],
+                        "inputs": row.get("inputs", {}),
+                        "results": row.get("results", {}),
+                        "summary": row.get("inputs", {}).get("summary", {})
+                    }
+            except Exception as e:
+                logger.warning(f"Supabase fetch optimization_run {run_id} failed: {e}")
+
+        if not run:
+            return None
+
+        # Check access security
+        run_site_id = run.get("site_id")
+        site = self.get_site(run_site_id) if run_site_id else None
+        site_owner = site.get("owner_session_id") if site else None
+        if site_owner and visitor_id and site_owner != visitor_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Cannot access optimization runs from another visitor's sandbox."
+            )
+
+        return run
 
     # 6. Visitor Sandbox Scoping & Lifecycle
     DEMO_SITE_ID = "00000000-0000-0000-0000-000000000001"
