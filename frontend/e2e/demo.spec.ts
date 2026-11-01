@@ -29,8 +29,8 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await expect(page.locator("text=Daily Electricity Cost").first()).toBeVisible();
     await expect(page.locator("text=Peak Grid Demand").first()).toBeVisible();
     await expect(page.locator("span", { hasText: "Solar Consumed On-Site" }).first()).toBeVisible();
-    await expect(page.locator("text=0 Violations")).toBeVisible();
-    await expect(page.locator("text=VERIFIED STRICT")).toBeVisible();
+    await expect(page.locator("text=0 Violations").first()).toBeVisible();
+    await expect(page.locator("text=VERIFIED STRICT").first()).toBeVisible();
 
     // Verify Strategy switching
     const solarTab = page.locator("button:has-text('Solar-Aware Strategy')");
@@ -524,8 +524,8 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
         assertContent: async () => {
           await expect(page.locator("text=Daily Electricity Cost").first()).toBeVisible({ timeout: 15000 });
           await expect(page.locator("text=Peak Grid Demand").first()).toBeVisible();
-          await expect(page.locator("text=VERIFIED STRICT")).toBeVisible();
-          await expect(page.locator("text=0 Violations")).toBeVisible();
+          await expect(page.locator("text=VERIFIED STRICT").first()).toBeVisible();
+          await expect(page.locator("text=0 Violations").first()).toBeVisible();
           // Ensure real numeric values are rendered (₹ and numeric digits)
           const bodyText = await page.innerText("body");
           expect(bodyText).toContain("₹");
@@ -653,5 +653,24 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await page.locator("text=Machine Setup").last().click();
     await page.waitForURL("**/setup");
     await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible();
+  });
+
+  test("21. Dashboard provides Export PDF / Print Report and renders clean executive summary with KPIs, schedule, and disclaimer", async ({ page }) => {
+    await page.goto("/dashboard", { waitUntil: "networkidle" });
+    await expect(page.locator("text=Industrial Scheduling Dashboard")).toBeVisible({ timeout: 15000 });
+
+    // Verify Print Report button exists and is visible
+    const printBtn = page.getByRole("button", { name: /Export PDF \/ Print Report/i });
+    await expect(printBtn).toBeVisible();
+
+    // Verify PrintableReport elements exist in DOM
+    const reportHeader = page.locator("text=SunSync AI — Industrial Energy Scheduling Report");
+    await expect(reportHeader).toBeAttached();
+
+    // Verify printable summary contains executive sections
+    await expect(page.locator("text=1. Executive KPI Summary & Financial ROI")).toBeAttached();
+    await expect(page.locator("text=2. Machine Production Dispatch & Optimization Rationale")).toBeAttached();
+    await expect(page.locator("text=3. Optimization Modeling Assumptions & Solver Verification")).toBeAttached();
+    await expect(page.locator("text=OPERATIONAL DECISION SUPPORT DISCLAIMER:")).toBeAttached();
   });
 });

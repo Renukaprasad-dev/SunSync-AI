@@ -468,7 +468,7 @@ export default function SetupPage() {
                       type="button"
                       onClick={() => handleDeleteMachine(m.id)}
                       className="text-slate-500 hover:text-rose-400 p-1 transition-colors focus:ring-2 focus:ring-rose-400 rounded"
-                      title={`Delete machine ${m.name}`}
+                      title="Delete machine"
                       aria-label={`Delete machine ${m.name}`}
                     >
                       <Trash2 className="w-4 h-4" />

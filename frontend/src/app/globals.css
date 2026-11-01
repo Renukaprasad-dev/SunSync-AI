@@ -32,3 +32,50 @@ a:focus-visible {
 .text-slate-500 {
   color: #94a3b8 !important; /* Raised from #64748b to #94a3b8 for 4.5:1+ contrast on dark background */
 }
+
+/* Executive Print Stylesheet */
+@media print {
+  /* Crisp white background and high-contrast dark text */
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Hide navigation, buttons, interactive controls */
+  header,
+  nav,
+  button,
+  .no-print,
+  [role="tablist"] {
+    display: none !important;
+  }
+
+  /* Unhide printable report components */
+  .print-only {
+    display: block !important;
+  }
+
+  /* Ensure main container margins are printable */
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Hide charts and interactive widgets in print to conserve ink and keep 1-2 pages */
+  .js-plotly-plot,
+  .recharts-responsive-container {
+    display: none !important;
+  }
+
+  /* Clean page breaks */
+  .page-break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .page-break-before {
+    break-before: page;
+    page-break-before: always;
+  }
+}

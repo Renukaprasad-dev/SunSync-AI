@@ -12,7 +12,8 @@ import {
   Calendar,
   Layers,
   ArrowRight,
-  History
+  History,
+  Printer
 } from "lucide-react";
 
 import { runOptimization, getOptimizationRun } from "@/lib/api";
@@ -22,6 +23,7 @@ import { LoadDispatchChart } from "@/components/charts/load-dispatch-chart";
 import { GanttScheduleChart } from "@/components/charts/gantt-chart";
 import { ReasonPanel } from "@/components/reason-card";
 import { SimulationDisclaimer } from "@/components/disclaimer";
+import { PrintableReport } from "@/components/printable-report";
 import { formatRs } from "@/lib/utils";
 
 export default function DashboardPage() {
@@ -319,6 +321,16 @@ export default function DashboardPage() {
             <Download className="w-3.5 h-3.5" />
             Download Schedule (CSV)
           </button>
+
+          <button
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-semibold transition-colors shadow-sm"
+            title="Export PDF / Print Executive Summary"
+            aria-label="Export PDF / Print Report"
+          >
+            <Printer className="w-3.5 h-3.5 text-amber-400" />
+            Export PDF / Print Report
+          </button>
         </div>
       </div>
 
@@ -480,6 +492,15 @@ export default function DashboardPage() {
         baselineSchedules={baseStrat.machine_schedules}
         optimizedSchedules={currentStrat.machine_schedules}
         machineReasons={data.machine_reasons}
+      />
+
+      {/* Printable Executive Summary Report */}
+      <PrintableReport
+        siteName="Peenya Precision Engineering (Demo Unit)"
+        siteLocation="Peenya Industrial Area, Bengaluru, Karnataka, India"
+        baseline={baseStrat}
+        optimized={currentStrat}
+        disclaimer={data.disclaimer}
       />
     </div>
   );
