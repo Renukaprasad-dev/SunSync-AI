@@ -5,7 +5,12 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": {
-        "includeFiles": ["app/forecast/models/**"]
+        "maxDuration": 15,
+        "memory": 1024,
+        "includeFiles": [
+          "app/forecast/models/**",
+          "app/**"
+        ]
       }
     }
   ],

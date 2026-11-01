@@ -316,3 +316,135 @@ The SunSync AI application is fully verified and production-ready:
 - **Mathematical Accuracy:** OR-Tools and SciPy HiGHS solvers yield identical optimal dispatch points with zero deadline violations.
 - **Explainability:** Plain-language justifications with exact quantitative power and tariff metrics explain every schedule adjustment to industrial plant operators.
 - **Production Serverless Ready:** Slim dependencies comply strictly with Vercel's 250 MB ceiling, and comprehensive automated tests protect against regressions.
+
+
+---
+
+## 9. Phase 2 Comprehensive Production Hardening & Feature Delivery Report
+
+### 9.1 Phase 2 Executive Summary & Scope Closure
+Following the initial audit pass, Phase 2 resolved every open gap identified in the audit matrix, hardened the application for an isolated public Vercel deployment, instituted full end-to-end integration testing against real backend processes, and delivered all four Priority-1 features from the project roadmap.
+
+### 9.2 Critical Retrospective on Previous Audit Claims (Section 1 Findings)
+
+During Phase 2, every claim from the initial audit report was re-evaluated against empirical test runs:
+
+| Statement in Initial Audit Report | Status in Phase 2 | Evidence / Verification Command |
+| :--- | :--- | :--- |
+| "Entire platform audited" | **Wrong (Overclaimed)** | Initial audit covered persistence only. Optimizer edge cases, forecaster corruption, metric consistency, CORS, and RLS were unaddressed until Phase 2. |
+| "Machine Setup P_max & inventory persistence" | **Verified** | Verified via `pytest tests/test_setup_persistence.py` & Playwright test 6. |
+| "Elimination of silent fake success fallback" | **Verified** | Verified in `frontend/src/lib/api.ts` (all mutating calls throw on error). |
+| "UUID RFC 4122 compliance for Supabase" | **Verified** | Verified via `ensure_uuid()` in `db.py` & `crypto.randomUUID()` in frontend. |
+| "Vercel 250 MB bundle constraint" | **Verified (Measured)** | Confirmed via clean virtualenv measurement: installed production requirements total **205.96 MB** (44.04 MB under ceiling). |
+| "Dual-solver HiGHS / OR-Tools equivalence" | **Verified** | Verified via `test_dual_solver_cost_agreement` asserting relative cost delta < 0.1%. |
+| "Zero deadline violations guarantee" | **Verified** | Verified via `test_all_constraints_strictly_enforced` and `verifier.py`. |
+| "Forecast model physical plausibility & corruption resilience" | **Verified** | Verified via `test_solar_forecast_physically_zero_at_night` & `test_compact_tree_corrupted_model_fallback`. |
+| "Multi-tab save concurrency & atomic writes" | **Verified** | Verified via `PUT /sites/{id}` atomic endpoint and `test_atomic_config_stale_version_conflict_409`. |
+| "Serverless read-only filesystem compatibility" | **Verified** | Explicit `STORAGE_MODE` (`supabase`, `local_file`, `memory`) with `/health` durability check. |
+| "CORS and public access sandbox" | **Verified** | Verified via `test_public_security_rate_limit_and_sandbox.py` and strict CORS preflight checks. |
+
+#### Tracked File Hygiene & `.gitignore`
+- `.gitignore` was updated to explicitly ignore `backend/app/data/local_store.json`, `backend/app/data/*.json`, `.env`, `.env.*`, `test-results/`, `playwright-report/`, `.next/`, and `node_modules/`.
+- Verified with `git ls-files` that **no** runtime data files, secret files, cache artifacts, or build outputs are tracked in git.
+
+---
+
+### 9.3 Test Changes & Integrity Review
+
+Three test files were modified during Phase 2 to align with production architectural improvements:
+
+#### 1. `frontend/tests/demo.spec.ts`
+- **Change:** Changed locator from checking mocked response fallbacks to interacting with the live backend. In test 6 (save persistence), updated the locator from `/Save Configuration/i` to `/Save Changes/i` because the UI button dynamically indicates dirty state with `"Save Changes*"`.
+- **Integrity Assessment:** Assertion was **not loosened**. It now tests real end-to-end network requests and persists changes across live browser reloads against a real running FastAPI instance.
+
+#### 2. `backend/tests/test_db_supabase.py`
+- **Change:** Updated mock Supabase client tests to accommodate explicit `STORAGE_MODE` switching and deterministic UUID translation.
+- **Integrity Assessment:** Behavior under test changed on purpose to support tri-mode persistence (`supabase`, `local_file`, `memory`). All persistence assertions retained.
+
+#### 3. `backend/tests/test_setup_persistence.py`
+- **Change:** Updated to test the atomic `save_site_configuration` endpoint with optimistic versioning rather than three fragmented REST calls.
+- **Integrity Assessment:** Test was **strengthened** to verify that site configuration, machine records, and tariff slabs update atomically with version tracking.
+
+---
+
+### 9.4 Database Migration 002 (Atomic Config RPC)
+
+- **Status:** **Not verified against a real remote database** (local offline verification executed via mock Supabase test suite and PostgreSQL syntax validation).
+- **Migration File:** `supabase/migrations/002_atomic_config_rpc.sql`
+- **Idempotency:** Implemented using `CREATE OR REPLACE FUNCTION save_site_configuration_atomic(...)` with `ALTER TABLE sites ADD COLUMN IF NOT EXISTS site_version INTEGER DEFAULT 1`. Contains **zero destructive statements** (`DROP`, `TRUNCATE`, or `DELETE FROM sites`).
+- **Verification Script:** Added `supabase/verify_002.sql`.
+
+#### Safe Migration Run Steps in Supabase SQL Editor:
+1. Open [Supabase Dashboard](https://supabase.com/dashboard) -> Select Project -> **SQL Editor**.
+2. Run `supabase/migrations/001_initial_schema.sql` (Creates tables: sites, machines, tariffs, profiles, optimization_runs).
+3. Run `supabase/seed.sql` (Seeds demo site `00000000-0000-0000-0000-000000000001` and 6 industrial machines).
+4. Run `supabase/migrations/002_atomic_config_rpc.sql` (Installs atomic RPC and version column).
+5. Run `supabase/verify_002.sql` (Rollback-safe verification script that tests function existence, atomic save, version increment, and 409 conflict handling).
+
+---
+
+### 9.5 Concurrency & Atomic Failure Protection
+
+Automated tests in `tests/test_atomic_config_endpoint.py` and `tests/test_concurrency_failure.py` verify transactional integrity:
+1. **Stale `expected_version` Conflict (409):** `test_atomic_config_stale_version_conflict_409` submits an update with a mismatched version number. The API returns HTTP 409 Conflict, and a subsequent `GET /sites/{id}` confirms that site data, machines, and tariff remain completely untouched.
+2. **Partial Write Prevention:** `test_atomic_config_failure_leaves_data_unchanged` simulates an error mid-transaction. The test verifies that site, machines, and tariff all roll back together with no partial state persisted.
+3. **Frontend 409 Conflict Handling:** Playwright test 17 verifies that when a 409 occurs, the UI displays a conflict warning with a "Reload Latest Configuration" action, preserving user input until resolved.
+
+---
+
+### 9.6 Phase 2 Feature Implementations
+
+#### Feature 1: Optimization Run History
+- **Backend:** Added `OptimizationRunSummary` and `OptimizationRunDetail` domain models. `POST /optimize` automatically logs runs to the repository via `save_optimization_run()`. Implemented `GET /runs` and `GET /runs/{id}` with visitor sandbox scoping.
+- **Frontend:** Created `/history` page displaying past solver runs with KPIs, solver run duration, verifier badge, and 1-click **"Reopen in Dashboard"** which passes the run ID to the dashboard to replay the complete dispatch curves and Gantt chart.
+
+#### Feature 2: Time-of-Day Tariff Editor UI
+- **Frontend:** Built `frontend/src/components/tariff-editor.tsx`. Supports customizable ToD slabs (Peak, Standard, Off-Peak) and demand charges (₹/kW/month). Features an interactive 96-interval stepped rate preview chart and strict 24-hour continuous validation (flags gaps or overlaps). Integrates into `/setup` for atomic persistence.
+
+#### Feature 3: Utility Bill Reality Check
+- **Backend:** Created `backend/app/routers/billing.py` with `POST /billing/reality-check`. Scales 24-hour baseline dispatch to a monthly 30-day projection, evaluates energy (kWh) and demand (kVA/kW) gaps, and identifies industrial root causes.
+- **Frontend:** Built `/bill-check` page with side-by-side KPI comparison cards, a 1-click sample industrial bill loader (BESCOM HT-2a tariff), qualitative diagnostic callouts (motor inrush, auxiliary base load, overtime shifts, fuel adjustment charges), and an industrial decision-support sanity check disclaimer.
+
+#### Feature 4: What-If Parameter Simulator
+- **Frontend:** Enhanced `/simulator` with an interactive "What-If Parameters Sandbox". Operators can transiently modify factory grid limits ($P_{\max}$), machine earliest/latest start windows and deadlines, and apply global tariff price multipliers to re-optimize instantaneously in-memory without altering database records.
+
+---
+
+### 9.7 The Four Definitive Status Lists
+
+#### 1. Verified (Evidence-Backed)
+- **MILP Optimization & Solver Parity:** Dual-solver cost agreement between SciPy HiGHS and Google OR-Tools verified within < 0.1% tolerance (`test_dual_solver_cost_agreement`).
+- **Constraint Enforcement:** Continuous running, availability windows, deadlines, and peak grid ceiling strictly enforced with 0 violations (`test_all_constraints_strictly_enforced`).
+- **Verifier Integrity:** Independent verifier validates schedules and catches constraint breaches (`test_verifier_detects_violations`).
+- **XGBoost Tree Evaluator:** Pure NumPy tree evaluation reproduces tree outputs, enforces zero solar generation at night, and gracefully falls back to synthetic profiles on corrupted models (`test_solar_forecast_physically_zero_at_night`, `test_compact_tree_corrupted_model_fallback`).
+- **Persistence Integrity:** Atomic configuration updates, 409 version conflict detection, and multi-table rollback verified (`test_atomic_config_endpoint.py`, `test_concurrency_failure.py`).
+- **Security & Sandboxing:** Rate limiting (120 req/min), visitor session isolation via `X-Visitor-Session-Id`, 1MB payload limits, and strict CORS preflight rejection verified (`test_public_security_rate_limit_and_sandbox.py`).
+- **Vercel Serverless Bundle Size:** Installed production dependencies in a clean virtualenv occupy **205.96 MB**, maintaining a **44.04 MB (17.6%)** safety margin below Vercel's 250 MB ceiling (`scratch/calc_prod_size.py`).
+- **End-to-End User Journeys:** 18 Playwright end-to-end tests passing against real running backend and frontend processes (`npx playwright test`).
+
+#### 2. Implemented but Not Fully Tested
+- **Supabase RPC against Live Cloud Database:** RPC function `save_site_configuration_atomic` and migration scripts are written and tested against mocked Supabase adapters and local stores, but have not been executed against a live hosted Supabase instance (pending user execution of migrations in Supabase SQL editor).
+- **Vercel Cloud Cold Start Latency:** Serverless configuration (`backend/vercel.json`, `api/index.py`, 1024 MB memory, 15s maxDuration) is verified locally, but actual cold-start execution times on Vercel's multi-tenant AWS Lambda infrastructure have not been benchmarked live.
+
+#### 3. Recommendations Not Implemented (Out of Scope for Decision Support)
+- **Direct Hardware / PLC Relay Actuation:** Automated SCADA/Modbus/PLC machine switching was not implemented; the platform is designed as an intelligent decision-support system for factory operators.
+- **Dynamic Real-Time Spot Market Tariff Feeds:** Automated scraper/API connections to Indian Energy Exchange (IEX) spot market prices were not built; tariffs are configured via official utility ToD slabs.
+- **Distributed Redis Cache for Public Sandbox:** Visitor sandbox sessions are managed in-memory with TTL cleanup rather than an external Redis cluster to avoid additional cloud infrastructure costs.
+
+#### 4. Blockers Needing User Action
+- **Apply Database Migrations:** Run `001_initial_schema.sql`, `seed.sql`, `002_atomic_config_rpc.sql`, and `verify_002.sql` in the Supabase Project SQL Editor.
+- **Configure Vercel Environment Variables:** Add `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `ALLOWED_ORIGINS` to the backend Vercel project settings, and `NEXT_PUBLIC_API_BASE_URL` to the frontend Vercel project settings.
+- **Merge & Push:** Review the clean local commits on branch `phase-2` and merge to `main` before pushing to GitHub (`git push origin phase-2` or `git checkout main && git merge phase-2`).
+
+---
+
+### 9.8 Code Changes for Independent Review
+
+Reviewers should specifically inspect the following core files:
+1. `backend/app/routers/sites.py` — Atomic `PUT /sites/{site_id}` endpoint with version checks and multi-entity save.
+2. `backend/app/core/db.py` — Storage abstraction layer handling `supabase`, `local_file`, and `memory` modes, visitor session sandboxing, and RFC 4122 UUID safety.
+3. `backend/app/core/security.py` — Rate limiting, visitor session extraction, payload size validation, and CORS policies.
+4. `supabase/migrations/002_atomic_config_rpc.sql` — Idempotent atomic PostgreSQL transaction function.
+5. `frontend/src/components/tariff-editor.tsx` — 96-interval ToD slab editor and continuous coverage validator.
+6. `frontend/src/app/bill-check/page.tsx` — Monthly utility bill reality checker and gap diagnostic.
+7. `scripts/smoke_live.py` — Cross-platform live deployment smoke verification tool.
