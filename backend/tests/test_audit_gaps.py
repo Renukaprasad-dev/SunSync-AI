@@ -192,10 +192,63 @@ def test_dual_solvers_cost_agreement_on_demo_site():
 
 # ----------------- 2. DASHBOARD METRIC CONSISTENCY -----------------
 
-def test_dashboard_kpis_recomputed_independently():
-    """Asserts that reported KPIs match an independent interval-by-interval math re-simulation."""
+def test_zero_negative_and_nonfinite_machine_power_rejected():
+    """Confirms domain model strictly rejects 0, negative, and non-finite machine power."""
+    # 1. Zero power
+    with pytest.raises(ValueError):
+        Machine(
+            id="m_zero",
+            name="Zero Power Machine",
+            power_kw=0.0,
+            duration_intervals=10,
+            earliest_start=32,
+            latest_start=48,
+            deadline_interval=60,
+            flexible=True
+        )
+
+    # 2. Negative power
+    with pytest.raises(ValueError):
+        Machine(
+            id="m_neg",
+            name="Negative Power Machine",
+            power_kw=-3.5,
+            duration_intervals=10,
+            earliest_start=32,
+            latest_start=48,
+            deadline_interval=60,
+            flexible=True
+        )
+
+    # 3. Non-finite power (inf, nan)
+    with pytest.raises(ValueError):
+        Machine(
+            id="m_inf",
+            name="Inf Power Machine",
+            power_kw=float("inf"),
+            duration_intervals=10,
+            earliest_start=32,
+            latest_start=48,
+            deadline_interval=60,
+            flexible=True
+        )
+
+    with pytest.raises(ValueError):
+        Machine(
+            id="m_nan",
+            name="NaN Power Machine",
+            power_kw=float("nan"),
+            duration_intervals=10,
+            earliest_start=32,
+            latest_start=48,
+            deadline_interval=60,
+            flexible=True
+        )
+
+def test_solver_timeout_behavior():
+    """Confirms solver handles aggressive timeout gracefully returning feasible schedule or clear error."""
     machines, solar, tariff, base_load = get_base_fixtures()
-    solver = ScipyMILPSolver()
+    solver = ORToolsCPSATSolver()
     res = solver.solve(
         machines=machines,
         solar=solar,
@@ -203,36 +256,60 @@ def test_dashboard_kpis_recomputed_independently():
         demand_charge_rate=20.0,
         base_load=base_load,
         p_max_kw=20.0,
-        strategy="cost_optimized"
+        strategy="cost_optimized",
+        time_limit_sec=0.0001 # Aggressive timeout
     )
-    kpis, load_prof, grid_prof, solar_prof, solar_used_prof, _ = ScheduleVerifier.verify_and_compute_kpis(
-        schedule=res["schedule"],
-        machines=machines,
-        solar=solar,
-        tariff=tariff,
-        demand_charge_rate=20.0,
-        base_load=base_load,
-        p_max_kw=20.0
-    )
+    # Solver must return either a verified schedule or INFEASIBLE with diagnosis, never crash
+    assert res["status"] in ("OPTIMAL", "FEASIBLE", "INFEASIBLE")
+    if res["status"] in ("OPTIMAL", "FEASIBLE"):
+        assert len(res["schedule"]) == len(machines)
+    else:
+        assert res["diagnosis"] is not None
 
-    # Independent manual calculation:
-    # 1. Total energy
-    expected_total_energy = sum(load_prof) * 0.25
-    assert abs(kpis.total_factory_energy_kwh - expected_total_energy) < 1e-2
+def test_dashboard_kpis_recomputed_independently():
+    """Asserts that both baseline and optimized reported KPIs match an independent interval-by-interval math re-simulation."""
+    machines, solar, tariff, base_load = get_base_fixtures()
+    solver = ScipyMILPSolver()
 
-    # 2. Grid energy
-    expected_grid_energy = sum(grid_prof) * 0.25
-    assert abs(kpis.grid_energy_imported_kwh - expected_grid_energy) < 1e-2
+    for strat in ("baseline", "cost_optimized"):
+        res = solver.solve(
+            machines=machines,
+            solar=solar,
+            tariff=tariff,
+            demand_charge_rate=20.0,
+            base_load=base_load,
+            p_max_kw=20.0,
+            strategy=strat
+        )
+        kpis, load_prof, grid_prof, solar_prof, solar_used_prof, _ = ScheduleVerifier.verify_and_compute_kpis(
+            schedule=res["schedule"],
+            machines=machines,
+            solar=solar,
+            tariff=tariff,
+            demand_charge_rate=20.0,
+            base_load=base_load,
+            p_max_kw=20.0
+        )
 
-    # 3. Peak grid demand
-    expected_peak = max(grid_prof)
-    assert abs(kpis.peak_grid_demand_kw - expected_peak) < 1e-2
+        # Independent manual calculation:
+        # 1. Total energy
+        expected_total_energy = sum(load_prof) * 0.25
+        assert abs(kpis.total_factory_energy_kwh - expected_total_energy) < 1e-2
 
-    # 4. Energy cost + demand charge
-    energy_cost = sum(grid_prof[t] * tariff[t] * 0.25 for t in range(96))
-    demand_cost = expected_peak * 20.0
-    expected_total_cost = energy_cost + demand_cost
-    assert abs(kpis.daily_cost_rs - expected_total_cost) < 1e-1
+        # 2. Grid energy
+        expected_grid_energy = sum(grid_prof) * 0.25
+        assert abs(kpis.grid_energy_imported_kwh - expected_grid_energy) < 1e-2
+
+        # 3. Peak grid demand
+        expected_peak = max(grid_prof)
+        assert abs(kpis.peak_grid_demand_kw - expected_peak) < 1e-2
+
+        # 4. Energy cost + demand charge
+        energy_cost = sum(grid_prof[t] * tariff[t] * 0.25 for t in range(96))
+        demand_cost = expected_peak * 20.0
+        expected_total_cost = energy_cost + demand_cost
+        assert abs(kpis.daily_cost_rs - expected_total_cost) < 1e-1
+
 
 # ----------------- 3. FORECAST VALIDATION -----------------
 

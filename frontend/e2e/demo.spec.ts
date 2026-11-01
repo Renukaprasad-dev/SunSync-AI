@@ -184,4 +184,184 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     // Assert user's input was preserved
     await expect(pMaxInput).toHaveValue("19");
   });
+
+  test("9. Setup page client-side validation shows inline error and dispatches no network request", async ({ page }) => {
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    let requestFired = false;
+    page.on("request", (req) => {
+      if (req.url().includes("/config") && req.method() === "PUT") {
+        requestFired = true;
+      }
+    });
+
+    const pMaxInput = page.locator("input[type='number']").first();
+    await pMaxInput.fill("-10"); // Invalid negative P_max
+
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await saveBtn.click();
+
+    // Verify inline validation error is displayed
+    await expect(page.locator("text=Factory peak grid limit (P_max) must be a positive number")).toBeVisible({ timeout: 5000 });
+    // Assert no PUT network request was dispatched
+    expect(requestFired).toBe(false);
+  });
+
+  test("10. Setup page machine deletion and tariff update persist through live reload", async ({ page }) => {
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // Initial count of machine rows
+    const deleteButtons = page.locator("button[title='Delete machine']");
+    const initialCount = await deleteButtons.count();
+    expect(initialCount).toBe(7);
+
+    // Delete last machine
+    await deleteButtons.last().click();
+    await expect(deleteButtons).toHaveCount(initialCount - 1);
+
+    // Edit tariff demand charge
+    const demandChargeInput = page.locator("input[type='number']").nth(1);
+    await demandChargeInput.fill("26.5");
+
+    // Click save
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await saveBtn.click();
+    await expect(page.locator("text=Saved Successfully!")).toBeVisible({ timeout: 10000 });
+
+    // Live reload from real server
+    await page.reload();
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // Assert machine remained deleted and tariff remained 26.5
+    const reloadedDeleteButtons = page.locator("button[title='Delete machine']");
+    await expect(reloadedDeleteButtons).toHaveCount(initialCount - 1);
+    const reloadedDemandInput = page.locator("input[type='number']").nth(1);
+    await expect(reloadedDemandInput).toHaveValue("26.5");
+
+    // Clean up: Add a machine back and restore 20.0
+    await page.getByRole("button", { name: "Add Machine" }).click();
+    await reloadedDemandInput.fill("20.0");
+    const restoreBtn = page.getByRole("button", { name: /Save Changes/i });
+    await restoreBtn.click();
+    await expect(page.locator("text=Saved Successfully!")).toBeVisible({ timeout: 10000 });
+  });
+
+  test("11. Scenario Simulator scenario toggle updates request payload and dispatch results", async ({ page }) => {
+    await page.goto("/simulator");
+    await expect(page.locator("text=What-If Scenario Simulator")).toBeVisible({ timeout: 15000 });
+
+    // Monitor POST /scenarios/simulate calls
+    let lastScenarioRequested = "";
+    page.on("request", (req) => {
+      if (req.url().includes("/scenarios/simulate") && req.method() === "POST") {
+        try {
+          const body = JSON.parse(req.postData() || "{}");
+          lastScenarioRequested = body.scenario;
+        } catch {}
+      }
+    });
+
+    // Switch to Sunny first (initial state is overcast)
+    const sunnyBtn = page.locator("button:has-text('1. Clear Sunny Day')");
+    await sunnyBtn.click();
+    await expect(page.locator("text=Overcast Tariff Arbitrage Active")).not.toBeVisible();
+    expect(lastScenarioRequested).toBe("sunny");
+
+    // Switch to Overcast
+    const overcastBtn = page.locator("button:has-text('3. Overcast / Monsoon Day')");
+    await overcastBtn.click();
+    await expect(page.locator("text=Overcast Tariff Arbitrage Active")).toBeVisible({ timeout: 10000 });
+    expect(lastScenarioRequested).toBe("overcast");
+  });
+
+  test("12. Forecast page handles 500 error state with retry and displays loading state", async ({ page }) => {
+    // Intercept backend forecast API with 500 error using exact predicate
+    const isForecastApi = (url: URL) => url.pathname === "/forecast" && url.port === "8000";
+
+    await page.route(isForecastApi, async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Forecast service temporarily unavailable." })
+      });
+    });
+
+    await page.goto("/forecast");
+    await expect(page.locator("text=Forecast service temporarily unavailable.")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+
+    // Unroute to test live loading and recovery
+    await page.unroute(isForecastApi);
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(page.locator("text=Computed on 20% held-out simulated test split")).toBeVisible({ timeout: 10000 });
+  });
+
+  test("13. Setup page displays 422 field-level error messages next to invalid inputs", async ({ page }) => {
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // Intercept PUT config with 422 structured field errors
+    await page.route("**/sites/**/config", async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: {
+              message: "Configuration validation failed.",
+              errors: {
+                p_max_grid_kw: "P_max must be >= 0.1 kW",
+                "machines[0].power_kw": "Power must be positive (> 0)"
+              }
+            }
+          })
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    const pMaxInput = page.locator("input[type='number']").first();
+    await pMaxInput.fill("22");
+
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await saveBtn.click();
+
+    // Verify field-level error messages appear next to the right inputs
+    await expect(page.locator("text=P_max must be >= 0.1 kW")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Power must be positive (> 0)")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Saved Successfully!")).not.toBeVisible();
+  });
+
+  test("14. Dashboard CSV export downloads valid file with unit-labelled headers", async ({ page }) => {
+    await page.goto("/dashboard");
+    await expect(page.locator("text=Industrial Scheduling Dashboard")).toBeVisible({ timeout: 15000 });
+
+    // Wait for download event
+    const downloadPromise = page.waitForEvent("download");
+    const downloadBtn = page.getByRole("button", { name: /Download Schedule \(CSV\)/i });
+    await downloadBtn.click();
+
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain(".csv");
+
+    // Read download stream content
+    const stream = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk as Buffer);
+    }
+    const csvContent = Buffer.concat(chunks).toString("utf-8");
+
+    // Validate unit-labelled headers
+    expect(csvContent).toContain("Machine Name");
+    expect(csvContent).toContain("Power (kW)");
+    expect(csvContent).toContain("Duration (Hours)");
+    expect(csvContent).toContain("Energy (kWh)");
+
+    // Validate machine data rows
+    expect(csvContent).toContain("CNC Milling Center");
+  });
 });

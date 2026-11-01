@@ -160,6 +160,19 @@ export default function SetupPage() {
     } catch (e: any) {
       if (e?.message?.includes("409") || e?.message?.toLowerCase().includes("conflict")) {
         setConflictError(true);
+      } else if (e?.message?.includes("422")) {
+        try {
+          const jsonStr = e.message.substring(e.message.indexOf("{"));
+          const parsed = JSON.parse(jsonStr);
+          if (parsed.errors) {
+            setFieldErrors(parsed.errors);
+            setValidationError(parsed.message || "Configuration validation failed. Check highlighted fields.");
+          } else {
+            setValidationError(e?.message || "Validation error.");
+          }
+        } catch {
+          setValidationError(e?.message || "Failed to persist configuration changes.");
+        }
       } else {
         setValidationError(e?.message || "Failed to persist configuration changes.");
       }
@@ -227,7 +240,7 @@ export default function SetupPage() {
       {!durable && (
         <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-          <span>Demo mode: changes are not permanently saved.</span>
+          <span>Demo mode (ephemeral memory): changes may reset at any time across serverless instances. Connect Supabase for persistent multi-user storage.</span>
         </div>
       )}
 
@@ -260,9 +273,16 @@ export default function SetupPage() {
           <input
             type="number"
             value={pMax}
-            onChange={(e) => setPMax(parseFloat(e.target.value) || 25.0)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-1.5 text-xs text-white"
+            onChange={(e) => setPMax(parseFloat(e.target.value) || 0)}
+            className={`w-full bg-slate-950 border rounded-md px-3 py-1.5 text-xs text-white ${
+              fieldErrors["p_max_grid_kw"] ? "border-rose-500" : "border-slate-800"
+            }`}
           />
+          {fieldErrors["p_max_grid_kw"] && (
+            <span className="text-[11px] text-rose-400 font-semibold mt-1 block">
+              {fieldErrors["p_max_grid_kw"]}
+            </span>
+          )}
           <span className="text-[11px] text-slate-500 mt-1 block">Sanctioned peak grid import limit.</span>
         </div>
 
@@ -324,8 +344,15 @@ export default function SetupPage() {
                       step="0.1"
                       value={m.power_kw}
                       onChange={(e) => handleMachineChange(idx, "power_kw", parseFloat(e.target.value) || 0)}
-                      className="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 w-20 text-slate-200 text-right"
+                      className={`bg-slate-950 border rounded px-2 py-0.5 w-20 text-slate-200 text-right ${
+                        fieldErrors[`machines[${idx}].power_kw`] ? "border-rose-500" : "border-slate-800"
+                      }`}
                     />
+                    {fieldErrors[`machines[${idx}].power_kw`] && (
+                      <span className="text-[10px] text-rose-400 font-semibold block mt-0.5">
+                        {fieldErrors[`machines[${idx}].power_kw`]}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2.5 px-3">
                     <div className="flex items-center gap-1">

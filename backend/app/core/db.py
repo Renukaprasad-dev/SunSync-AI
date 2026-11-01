@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -583,5 +584,150 @@ class DataRepository:
             except Exception as e:
                 logger.warning(f"Supabase get_base_load failed ({e}); falling back to local store.")
         return self._base_loads.get(site_id) or self._base_loads["00000000-0000-0000-0000-000000000001"]
+
+    # 6. Visitor Sandbox Scoping & Lifecycle
+    DEMO_SITE_ID = "00000000-0000-0000-0000-000000000001"
+
+    def get_site_for_visitor(self, site_id: str, visitor_id: str) -> Dict[str, Any]:
+        """Returns site with visitor scoping:
+        - Demo site (DEMO_SITE_ID) is publicly readable by all visitors.
+        - Visitor sandbox sites can only be read by their creator/owner.
+        """
+        site = self.get_site(site_id)
+        if not site:
+            raise HTTPException(status_code=404, detail=f"Site {site_id} not found.")
+
+        owner = site.get("owner_session_id")
+        if site_id != self.DEMO_SITE_ID and owner and owner != visitor_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Visitor {visitor_id} cannot access sandbox site {site_id} owned by another session."
+            )
+        return site
+
+    def clone_demo_site_for_visitor(self, visitor_id: str) -> str:
+        """Clones the shared demo site into a visitor-scoped sandbox site."""
+        new_site_id = str(uuid.uuid4())
+        demo_site = self.get_site(self.DEMO_SITE_ID) or {
+            "name": "Peenya Precision Engineering (Demo Unit)",
+            "location": "Peenya Industrial Area, Bengaluru, Karnataka, India",
+            "p_max_grid_kw": 25.0,
+            "solar_capacity_kw": 5.0,
+            "currency": "INR",
+            "grid_emission_factor_kg_per_kwh": 0.82
+        }
+        demo_machines = self.get_machines(self.DEMO_SITE_ID)
+        demo_tariff = self.get_tariff(self.DEMO_SITE_ID)
+
+        # Deep clone site entity
+        new_site = copy.deepcopy(demo_site)
+        new_site["id"] = new_site_id
+        new_site["name"] = f"{demo_site.get('name', 'Demo Factory')} (Visitor Sandbox)"
+        new_site["owner_session_id"] = visitor_id
+        new_site["version"] = 1
+        new_site["created_at"] = time.time()
+
+        # Clone machines with newly assigned UUIDs
+        new_machines = []
+        for m in demo_machines:
+            m_copy = m.model_copy()
+            m_copy.id = str(uuid.uuid4())
+            new_machines.append(m_copy)
+
+        new_tariff = demo_tariff.model_copy()
+
+        if self.is_supabase_enabled:
+            headers = self._get_supabase_headers()
+            site_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites"
+            site_payload = {
+                "id": new_site_id,
+                "name": new_site["name"],
+                "location": new_site.get("location", "Bengaluru"),
+                "p_max_grid_kw": new_site.get("p_max_grid_kw", 25.0),
+                "solar_capacity_kw": new_site.get("solar_capacity_kw", 5.0),
+                "currency": new_site.get("currency", "INR"),
+                "grid_emission_factor_kg_per_kwh": new_site.get("grid_emission_factor_kg_per_kwh", 0.82),
+                "owner_session_id": visitor_id,
+                "version": 1
+            }
+            resp = httpx.post(site_url, headers=headers, json=site_payload, timeout=3.0)
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(f"Supabase clone site failed ({resp.status_code}): {resp.text}")
+
+        with self._lock:
+            self._sites[new_site_id] = new_site
+            self._machines[new_site_id] = new_machines
+            self._tariffs[new_site_id] = new_tariff
+            self._save_local_store()
+
+        return new_site_id
+
+    def save_site_config_for_visitor(
+        self,
+        site_id: str,
+        site_data: Dict[str, Any],
+        machines: List[Machine],
+        tariff: Tariff,
+        expected_version: Optional[int],
+        visitor_id: str
+    ) -> Dict[str, Any]:
+        """Saves site config enforcing:
+        1. Direct mutation of the shared seeded demo site is rejected (403 Forbidden).
+        2. Visitor A cannot modify visitor B's sandbox site (403 Forbidden).
+        """
+        if site_id == self.DEMO_SITE_ID:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Direct mutation of the shared demo site is rejected. Clone to a visitor sandbox site first."
+            )
+
+        site = self.get_site(site_id)
+        if not site:
+            raise HTTPException(status_code=404, detail=f"Site {site_id} not found.")
+
+        owner = site.get("owner_session_id")
+        if owner and owner != visitor_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Visitor {visitor_id} cannot modify sandbox site {site_id} owned by another session."
+            )
+
+        return self.save_site_config(site_id, site_data, machines, tariff, expected_version)
+
+    def cleanup_expired_sandboxes(self, max_age_seconds: int = 86400) -> int:
+        """Purges visitor sandbox sites older than TTL.
+        CRITICAL: NEVER deletes the shared seeded demo site (DEMO_SITE_ID).
+        """
+        now = time.time()
+        purged = 0
+        with self._lock:
+            to_delete = []
+            for s_id, s_data in list(self._sites.items()):
+                if s_id == self.DEMO_SITE_ID:
+                    continue  # NEVER delete shared demo site!
+                owner = s_data.get("owner_session_id")
+                created_at = s_data.get("created_at", 0)
+                if owner and (now - created_at > max_age_seconds):
+                    to_delete.append(s_id)
+
+            for s_id in to_delete:
+                del self._sites[s_id]
+                self._machines.pop(s_id, None)
+                self._tariffs.pop(s_id, None)
+                purged += 1
+
+            if self.is_supabase_enabled and to_delete:
+                headers = self._get_supabase_headers()
+                for s_id in to_delete:
+                    try:
+                        del_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites?id=eq.{s_id}&owner_session_id=not.is.null"
+                        httpx.delete(del_url, headers=headers, timeout=3.0)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete expired sandbox {s_id} from Supabase: {e}")
+
+            if purged > 0:
+                self._save_local_store()
+
+        return purged
 
 repo = DataRepository()

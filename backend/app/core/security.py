@@ -18,7 +18,16 @@ def get_visitor_session_id(request: Request) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"ip:{client_ip}"))
 
 class RateLimiter:
-    """Sliding-window in-memory rate limiter per client/session."""
+    """Sliding-window in-memory rate limiter per client/session.
+    
+    Serverless Multi-Instance Architecture Note:
+    This rate limiter operates in process memory. On serverless runtimes (such as Vercel
+    lambda functions), each worker instance maintains its own memory space. This provides
+    low-latency (<0.1ms) abuse mitigation per worker without external network dependencies.
+    For globally coordinated rate limiting across all concurrent serverless instances,
+    an external distributed KV store (e.g., Upstash Redis) or Supabase table can be wired,
+    though each remote lookup introduces a 15-40ms latency overhead per HTTP request.
+    """
     def __init__(self, max_requests: int = 60, window_seconds: float = 60.0):
         self.max_requests = max_requests
         self.window_seconds = window_seconds

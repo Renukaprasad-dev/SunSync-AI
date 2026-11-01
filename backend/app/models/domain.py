@@ -36,7 +36,7 @@ class SiteConfigResponse(BaseModel):
 class Machine(BaseModel):
     id: str = Field(..., description="Unique machine identifier")
     name: str = Field(..., description="Machine display name")
-    power_kw: float = Field(..., ge=0, description="Rated continuous power draw in kW")
+    power_kw: float = Field(..., gt=0, description="Rated continuous power draw in kW")
     duration_intervals: int = Field(..., gt=0, le=96, description="Run duration in 15-minute intervals")
     earliest_start: int = Field(..., ge=0, le=95, description="Earliest allowable start slot (0-95)")
     latest_start: int = Field(..., ge=0, le=95, description="Latest allowable start slot (0-95)")
@@ -45,6 +45,9 @@ class Machine(BaseModel):
 
     @model_validator(mode="after")
     def validate_machine_bounds(self):
+        import math
+        if not math.isfinite(self.power_kw) or self.power_kw <= 0:
+            raise ValueError(f"Machine '{self.name}': power_kw must be a positive finite number (> 0)")
         if self.earliest_start > self.latest_start:
             raise ValueError(f"Machine '{self.name}': earliest_start ({self.earliest_start}) must be <= latest_start ({self.latest_start})")
         if self.earliest_start + self.duration_intervals > self.deadline_interval:

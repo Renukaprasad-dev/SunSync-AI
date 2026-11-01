@@ -346,20 +346,5 @@ export async function runSimulation(payload: {
 }
 
 export async function getForecast(scenario: string = "sunny"): Promise<ForecastResponse> {
-  const fallback: ForecastResponse = {
-    scenario,
-    solar_forecast: DEMO_SOLAR,
-    load_forecast: Array.from({ length: 96 }, (_, i) => (i < 32 || i >= 76 ? 0.8 : 1.5)),
-    weather: {
-      cloud_cover: Array.from({ length: 96 }, () => (scenario === "overcast" ? 85 : scenario === "partly_cloudy" ? 45 : 10)),
-      temperature_c: Array.from({ length: 96 }, () => 28.5)
-    },
-    metrics: {
-      solar_mae_kw: 0.054,
-      solar_rmse_kw: 0.095,
-      load_mae_kw: 0.044,
-      load_rmse_kw: 0.057
-    }
-  };
-  return fetchWithFallback<ForecastResponse>(`/forecast?scenario=${scenario}`, undefined, fallback);
+  return fetchWithFallback<ForecastResponse>(`/forecast?scenario=${scenario}`);
 }

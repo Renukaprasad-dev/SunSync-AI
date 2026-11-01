@@ -53,15 +53,23 @@ async def limit_request_size(request: Request, call_next):
 
 @app.get("/health", tags=["Health"])
 def health_check():
+    mode = repo.storage_mode
+    warning = (
+        "Serverless ephemeral memory mode: changes may reset at any time across serverless instances. "
+        "Configure Supabase (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) for persistent multi-user deployment."
+        if mode == "memory"
+        else None
+    )
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
         "intervals_per_day": settings.INTERVALS_PER_DAY,
         "interval_minutes": settings.INTERVAL_MINUTES,
-        "storage_mode": repo.storage_mode,
+        "storage_mode": mode,
         "durable": repo.is_durable,
-        "supabase_configured": repo.is_supabase_enabled
+        "supabase_configured": repo.is_supabase_enabled,
+        "warning": warning,
     }
 
 # Include routers

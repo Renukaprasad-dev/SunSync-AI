@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { CloudSun, BarChart2, ShieldCheck, Thermometer, Cloud, Activity, RefreshCw } from "lucide-react";
+import { CloudSun, BarChart2, ShieldCheck, Thermometer, Cloud, Activity, RefreshCw, AlertCircle } from "lucide-react";
 import { getForecast } from "@/lib/api";
 import { ForecastResponse } from "@/lib/types";
 import DynamicPlot from "@/components/charts/dynamic-plotly";
@@ -193,6 +193,28 @@ export default function ForecastPage() {
           </button>
         </div>
       </div>
+
+      {loading && !data && (
+        <div className="py-24 text-center space-y-3">
+          <div className="w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-xs text-slate-400">Loading XGBoost forecast models...</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => fetchForecastData(scenario)}
+            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[11px] font-semibold"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Honest Error Metrics Grid */}
       {data && (
