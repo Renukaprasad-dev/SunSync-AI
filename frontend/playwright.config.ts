@@ -14,7 +14,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "powershell -Command \"Set-Location ..\\backend; & .\\.venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000\"",
+      command: "powershell -Command \"Set-Location ..\\backend; $tempStore = Join-Path $env:TEMP 'sunsync_playwright_store.json'; Remove-Item -ErrorAction SilentlyContinue $tempStore; $env:STORAGE_MODE='local_file'; $env:SUPABASE_URL=''; $env:SUPABASE_SERVICE_ROLE_KEY=''; $env:LOCAL_STORE_PATH=$tempStore; & .\\.venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000\"",
       url: "http://127.0.0.1:8000/health",
       reuseExistingServer: true,
       timeout: 30000,

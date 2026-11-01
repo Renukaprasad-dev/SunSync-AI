@@ -15,7 +15,8 @@ from app.core.config import settings
 logger = logging.getLogger("sunsync.db")
 
 LOCAL_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-LOCAL_STORE_PATH = LOCAL_DATA_DIR / "local_store.json"
+_env_store = os.environ.get("LOCAL_STORE_PATH")
+LOCAL_STORE_PATH = Path(_env_store).resolve() if _env_store else LOCAL_DATA_DIR / "local_store.json"
 
 def ensure_uuid(val: str) -> str:
     """Ensures string is a valid UUID; converts non-UUID strings deterministically."""
@@ -49,7 +50,7 @@ class DataRepository:
 
     @property
     def is_supabase_enabled(self) -> bool:
-        return bool(settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY)
+        return self.storage_mode == "supabase" and bool(settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY)
 
     @property
     def storage_mode(self) -> str:
@@ -57,7 +58,7 @@ class DataRepository:
             return self._explicit_mode
         if settings.STORAGE_MODE:
             return settings.STORAGE_MODE
-        if self.is_supabase_enabled:
+        if bool(settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY):
             return "supabase"
         # Serverless runtimes have ephemeral / read-only filesystems
         if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
@@ -232,7 +233,7 @@ class DataRepository:
             return
         with self._lock:
             try:
-                LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                LOCAL_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
                 serializable = {
                     "sites": self._sites,
                     "machines": {s_id: [m.model_dump() for m in m_list] for s_id, m_list in self._machines.items()},
