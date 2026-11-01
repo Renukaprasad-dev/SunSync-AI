@@ -49,13 +49,26 @@ class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(LimitRequestSizeMiddleware)
 
+# Explicit custom headers used by frontend client
+CORS_ALLOW_HEADERS = [
+    "Content-Type",
+    "X-Visitor-Session-Id",
+    "X-Visitor-Id",
+    "If-Match",
+    "Authorization",
+    "Accept",
+    "Origin",
+    "User-Agent",
+    "*"
+]
+
 # 3. Add CORSMiddleware LAST so it wraps outermost (ensuring 4xx/5xx/413 carry CORS headers)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins_list if allowed_origins_list else ["http://localhost:3000"],
     allow_credentials=allow_creds,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-    allow_headers=["*"],
+    allow_headers=CORS_ALLOW_HEADERS,
     expose_headers=["*"],
     max_age=600,
 )

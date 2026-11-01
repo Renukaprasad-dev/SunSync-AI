@@ -90,8 +90,16 @@ async function main() {
   console.log(colors.bold + "  SunSync AI — Unified Local Development Environment" + colors.reset);
   console.log(colors.cyan + "═".repeat(60) + colors.reset + "\n");
 
-  const pythonExec = findPython();
-  log("DevRunner", `Python runtime: ${colors.green}${pythonExec}${colors.reset}`);
+  // Parse command line arguments for host binding
+  const args = process.argv.slice(2);
+  const allowLan = args.includes("--lan") || args.includes("--host=0.0.0.0") || args.includes("0.0.0.0");
+  const host = allowLan ? "0.0.0.0" : "127.0.0.1";
+
+  if (allowLan) {
+    log("Security", `${colors.yellow}⚠️  WARNING: Binding to 0.0.0.0 exposes the SunSync AI backend to your local area network (LAN).${colors.reset}`, colors.yellow);
+  } else {
+    log("DevRunner", `Binding to secure local loopback (${colors.green}127.0.0.1${colors.reset}). Use --lan to expose to local network.`);
+  }
 
   // 1. Check if ports are already bound
   const port8000InUse = await checkPort(8000);
@@ -113,7 +121,7 @@ async function main() {
     log("Backend", "Starting FastAPI server on http://127.0.0.1:8000...", colors.blue);
     backendProc = spawn(
       pythonExec,
-      ["-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      ["-m", "uvicorn", "app.main:app", "--host", host, "--port", "8000", "--reload"],
       {
         cwd: backendDir,
         env: {

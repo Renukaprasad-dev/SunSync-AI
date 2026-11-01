@@ -54,10 +54,11 @@ function getClientSessionId(): string {
   }
 }
 
-export async function fetchWithFallback<T>(url: string, options?: RequestInit, fallbackData?: T): Promise<T> {
+export async function fetchWithFallback<T>(url: string, options?: RequestInit): Promise<T> {
   const method = (options?.method || "GET").toUpperCase();
   const isGet = method === "GET";
   const maxAttempts = isGet ? 2 : 1;
+  const isDev = process.env.NODE_ENV !== "production";
 
   let lastError: any = null;
 
@@ -76,8 +77,10 @@ export async function fetchWithFallback<T>(url: string, options?: RequestInit, f
           }
         });
       } catch (networkErr: any) {
-        // If localhost:8000 fails (e.g. Windows IPv6 ::1 resolution mismatch), transparently retry with 127.0.0.1
-        if (API_BASE_URL.includes("localhost:8000")) {
+        // Restrict localhost -> 127.0.0.1 client retry:
+        // 1. Only in development builds (never production)
+        // 2. Only if the connection was genuinely refused before receiving any HTTP response
+        if (isDev && API_BASE_URL.includes("localhost:8000")) {
           try {
             const fallbackHostUrl = primaryUrl.replace("localhost:8000", "127.0.0.1:8000");
             res = await fetch(fallbackHostUrl, {
@@ -138,9 +141,7 @@ export async function fetchWithFallback<T>(url: string, options?: RequestInit, f
     }
   }
 
-  if (fallbackData !== undefined) {
-    return fallbackData;
-  }
+  // Production code must never return mock data on failure
   throw lastError;
 }
 

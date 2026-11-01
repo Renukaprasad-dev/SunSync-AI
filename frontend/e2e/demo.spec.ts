@@ -526,9 +526,15 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
           await expect(page.locator("text=Peak Grid Demand").first()).toBeVisible();
           await expect(page.locator("text=VERIFIED STRICT")).toBeVisible();
           await expect(page.locator("text=0 Violations")).toBeVisible();
-          // Ensure real values are rendered (contains ₹ currency symbol)
+          // Ensure real numeric values are rendered (₹ and numeric digits)
           const bodyText = await page.innerText("body");
           expect(bodyText).toContain("₹");
+          expect(bodyText).toMatch(/₹\s*[0-9]+(\.[0-9]+)?/);
+          expect(bodyText).toMatch(/[0-9]+(\.[0-9]+)?\s*kW/);
+          // Assert Plotly chart traces are rendered and non-empty
+          await expect(page.locator(".js-plotly-plot").first()).toBeVisible({ timeout: 15000 });
+          const traces = page.locator(".js-plotly-plot svg.main-svg g.trace");
+          expect(await traces.count()).toBeGreaterThan(0);
         }
       },
       {
@@ -536,8 +542,13 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
         assertContent: async () => {
           await expect(page.locator("text=Optimization Run History")).toBeVisible({ timeout: 15000 });
           await expect(page.locator("text=Logged Solver Runs")).toBeVisible();
-          // Verify history table has at least one real entry
+          // Verify history table has at least one real entry with numeric values
           await expect(page.locator("table")).toBeVisible();
+          const rows = page.locator("table tbody tr");
+          expect(await rows.count()).toBeGreaterThan(0);
+          const tableText = await page.locator("table").innerText();
+          expect(tableText).toContain("₹");
+          expect(tableText).toMatch(/[0-9]+(\.[0-9]+)?\s*kW/);
         }
       },
       {
@@ -546,6 +557,9 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
           await expect(page.locator("text=Utility Bill Reality Check")).toBeVisible({ timeout: 15000 });
           await expect(page.locator("text=Total Monthly Bill").first()).toBeVisible();
           await expect(page.locator("text=Observed Gaps & Probable Causes")).toBeVisible();
+          // Verify form fields and initial sanity calculations contain numeric metrics
+          const bodyText = await page.innerText("body");
+          expect(bodyText).toMatch(/₹\s*[0-9,]+/);
         }
       },
       {
@@ -554,6 +568,9 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
           await expect(page.locator("text=What-If Scenario Simulator")).toBeVisible({ timeout: 15000 });
           await expect(page.locator("text=What-If Parameters Sandbox")).toBeVisible();
           await expect(page.locator("text=CNC Milling Center").first()).toBeVisible();
+          // Verify sandbox table contains machines with numeric kW and intervals
+          const tableText = await page.locator("table").innerText();
+          expect(tableText).toMatch(/[0-9]+(\.[0-9]+)?\s*kW/);
         }
       },
       {
@@ -562,6 +579,11 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
           await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
           await expect(page.locator("input[value='CNC Milling Center']")).toBeVisible();
           await expect(page.locator("text=Time-of-Day (ToD) Tariff Slabs")).toBeVisible();
+          // Verify numeric grid limit input is present and non-empty
+          const gridInput = page.locator("input#p_max_grid_kw, input[type='number']").first();
+          await expect(gridInput).toBeVisible();
+          const val = await gridInput.inputValue();
+          expect(parseFloat(val)).toBeGreaterThan(0);
         }
       },
       {
@@ -573,6 +595,13 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
           // Assert real numbers in metric cards
           await expect(page.locator("text=0.054")).toBeVisible();
           await expect(page.locator("text=0.095")).toBeVisible();
+          // Assert 96-interval forecast chart traces are rendered and non-empty
+          await expect(page.locator(".js-plotly-plot").first()).toBeVisible({ timeout: 15000 });
+          const traces = page.locator(".js-plotly-plot svg.main-svg g.trace");
+          expect(await traces.count()).toBeGreaterThan(0);
+          // Assert 96-interval forecast text present
+          const bodyText = await page.innerText("body");
+          expect(bodyText).toContain("96-Interval XGBoost Industrial Solar & Load Forecast");
         }
       }
     ];
