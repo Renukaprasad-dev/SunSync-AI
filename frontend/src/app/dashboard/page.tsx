@@ -32,7 +32,39 @@ export default function DashboardPage() {
   const [isReopened, setIsReopened] = useState<boolean>(false);
   const [reopenedMeta, setReopenedMeta] = useState<{ id?: string; created_at?: string; scenario?: string; solver_name?: string } | null>(null);
 
-  const fetchOptimization = async () => {
+  // Initialize and persist strategy tab selection across reloads via localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedStrategy = localStorage.getItem("sunsync_dashboard_strategy");
+      if (savedStrategy === "cost_optimized" || savedStrategy === "solar_aware" || savedStrategy === "baseline") {
+        setSelectedStrategy(savedStrategy);
+      }
+    }
+  }, []);
+
+  const handleStrategyChange = (strat: "cost_optimized" | "solar_aware" | "baseline") => {
+    setSelectedStrategy(strat);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("sunsync_dashboard_strategy", strat);
+    }
+  };
+
+  // Cache optimize results per (site_version, scenario) in sessionStorage for instant navigation
+  const fetchOptimization = async (forceRefresh: boolean = false) => {
+    const cacheKey = "sunsync_opt_cache_v1_sunny";
+    if (!forceRefresh && typeof window !== "undefined") {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          setData(JSON.parse(cached));
+          setLoading(false);
+          return;
+        } catch {
+          // fallback to fetch
+        }
+      }
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -41,6 +73,9 @@ export default function DashboardPage() {
         strategies: ["baseline", "solar_aware", "cost_optimized"]
       });
       setData(resp);
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(cacheKey, JSON.stringify(resp));
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to load optimization schedule.");
     } finally {
@@ -124,9 +159,47 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="py-24 text-center space-y-4">
-        <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-        <p className="text-slate-400 text-sm font-medium">Running OR-Tools MILP Solver for 3 Strategies...</p>
+      <div className="space-y-6 py-2 animate-pulse">
+        {/* Skeleton Header */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-800">
+          <div className="space-y-2">
+            <div className="h-7 w-72 bg-slate-800 rounded-lg"></div>
+            <div className="h-4 w-96 bg-slate-800/60 rounded"></div>
+          </div>
+          <div className="flex gap-2">
+            <div className="h-8 w-24 bg-slate-800 rounded-lg"></div>
+            <div className="h-8 w-44 bg-slate-800 rounded-lg"></div>
+          </div>
+        </div>
+
+        {/* Skeleton Delta Banner */}
+        <div className="h-20 bg-slate-900/60 border border-slate-800 rounded-xl p-4"></div>
+
+        {/* Skeleton Strategy Tabs */}
+        <div className="h-12 bg-slate-900 border border-slate-800 rounded-xl"></div>
+
+        {/* Skeleton KPI Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-28 bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="h-3 w-20 bg-slate-800 rounded"></div>
+              <div className="h-6 w-24 bg-slate-700 rounded"></div>
+              <div className="h-3 w-16 bg-slate-800/60 rounded"></div>
+            </div>
+          ))}
+        </div>
+
+        {/* Skeleton Dispatch Chart */}
+        <div className="h-80 bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
+          <div className="h-5 w-48 bg-slate-800 rounded"></div>
+          <div className="h-56 bg-slate-950/40 rounded-lg"></div>
+        </div>
+
+        {/* Skeleton Gantt Chart */}
+        <div className="h-64 bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
+          <div className="h-5 w-48 bg-slate-800 rounded"></div>
+          <div className="h-44 bg-slate-950/40 rounded-lg"></div>
+        </div>
       </div>
     );
   }
@@ -136,7 +209,7 @@ export default function DashboardPage() {
       <div className="py-16 text-center space-y-4 bg-slate-900/40 rounded-xl border border-slate-800 p-8">
         <p className="text-rose-400 text-sm font-semibold">Error loading optimization: {error}</p>
         <button
-          onClick={fetchOptimization}
+          onClick={() => fetchOptimization(true)}
           className="px-4 py-2 bg-blue-600 text-white rounded-md text-xs font-semibold hover:bg-blue-500"
         >
           Retry Optimization
@@ -218,7 +291,7 @@ export default function DashboardPage() {
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
-            onClick={fetchOptimization}
+            onClick={() => fetchOptimization(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 text-xs font-medium text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
           >
             <RotateCw className="w-3.5 h-3.5" />
@@ -235,10 +308,48 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Prominent Delta Header: Executive Savings & Shift Summary */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-900/95 to-blue-950/30 border border-slate-800 rounded-xl p-4 shadow-md">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5 mb-0.5">
+              <Coins className="w-3.5 h-3.5" /> Strategy Optimization Delta
+            </div>
+            <div className="text-sm text-slate-300">
+              Active: <span className="font-semibold text-white">{currentStrat.display_title}</span> vs <span className="text-slate-400">Baseline (Earliest Start)</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 w-full sm:w-auto">
+            <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
+              <div className="text-[10px] text-slate-400 uppercase font-semibold">Cost Savings</div>
+              <div className={`text-sm font-extrabold ${costDelta <= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                {costDelta <= 0 ? `-${Math.abs(Number(costDeltaPct))}% (${formatRs(Math.abs(costDelta))})` : `+${costDeltaPct}%`}
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
+              <div className="text-[10px] text-slate-400 uppercase font-semibold">Peak Demand Reduction</div>
+              <div className={`text-sm font-extrabold ${peakDelta <= 0 ? "text-cyan-400" : "text-amber-400"}`}>
+                {peakDelta <= 0 ? `${Math.abs(peakDelta).toFixed(1)} kW (${Math.abs(Number(peakDeltaPct))}%)` : `+${peakDelta.toFixed(1)} kW`}
+              </div>
+            </div>
+
+            <div className="col-span-2 sm:col-span-1 bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
+              <div className="text-[10px] text-slate-400 uppercase font-semibold">Solar Utilized</div>
+              <div className="text-sm font-extrabold text-amber-400">
+                {currKpi.solar_self_consumption_pct}%
+                <span className="text-[11px] font-normal text-slate-400 ml-1">({currKpi.solar_energy_used_kwh} kWh)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Strategy Toggle Tabs */}
       <div className="flex flex-wrap items-center gap-2 p-1 bg-slate-900 border border-slate-800 rounded-xl">
         <button
-          onClick={() => setSelectedStrategy("cost_optimized")}
+          onClick={() => handleStrategyChange("cost_optimized")}
           className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
             selectedStrategy === "cost_optimized"
               ? "bg-blue-600 text-white shadow-md"
@@ -251,7 +362,7 @@ export default function DashboardPage() {
         </button>
 
         <button
-          onClick={() => setSelectedStrategy("solar_aware")}
+          onClick={() => handleStrategyChange("solar_aware")}
           className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
             selectedStrategy === "solar_aware"
               ? "bg-amber-500 text-slate-950 shadow-md font-extrabold"
@@ -264,7 +375,7 @@ export default function DashboardPage() {
         </button>
 
         <button
-          onClick={() => setSelectedStrategy("baseline")}
+          onClick={() => handleStrategyChange("baseline")}
           className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
             selectedStrategy === "baseline"
               ? "bg-slate-700 text-white shadow-md"
