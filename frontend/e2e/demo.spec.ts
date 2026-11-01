@@ -626,4 +626,32 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
       expect(failedRequests, `Failed network requests detected on ${r.path}: ${failedRequests.join("; ")}`).toHaveLength(0);
     }
   });
+
+  test("20. Responsive navigation displays clean hamburger menu on mobile (375px), tablet (768px), and full navbar on desktop (1280px)", async ({ page }) => {
+    // 1. Desktop viewport (1280px)
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/", { waitUntil: "networkidle" });
+    await expect(page.locator("nav.lg\\:flex")).toBeVisible();
+    await expect(page.locator("button[aria-label='Toggle navigation menu']")).toBeHidden();
+
+    // 2. Tablet viewport (768px)
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(page.locator("button[aria-label='Toggle navigation menu']")).toBeVisible();
+    await expect(page.locator("nav.lg\\:flex")).toBeHidden();
+
+    // 3. Mobile viewport (375px)
+    await page.setViewportSize({ width: 375, height: 667 });
+    const hamburger = page.locator("button[aria-label='Toggle navigation menu']");
+    await expect(hamburger).toBeVisible();
+
+    // Click hamburger to open mobile menu
+    await hamburger.click();
+    await expect(page.locator("text=What-If Simulator").last()).toBeVisible();
+    await expect(page.locator("text=Machine Setup").last()).toBeVisible();
+
+    // Click link to navigate to setup page
+    await page.locator("text=Machine Setup").last().click();
+    await page.waitForURL("**/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible();
+  });
 });

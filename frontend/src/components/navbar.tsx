@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sun, Zap, Sliders, LineChart, Cpu, CloudSun, History, FileCheck, RefreshCw } from "lucide-react";
+import { Sun, Zap, Sliders, LineChart, Cpu, CloudSun, History, FileCheck, RefreshCw, Menu, X } from "lucide-react";
 import { getHealth, API_BASE_URL } from "@/lib/api";
 import { HealthResponse } from "@/lib/types";
 
@@ -12,6 +12,12 @@ export function Navbar() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthStatus, setHealthStatus] = useState<"checking" | "connected" | "ephemeral" | "offline">("checking");
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+
+  // Close mobile drawer on route navigation
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [pathname]);
 
   const checkHealth = useCallback(async () => {
     setIsRefreshing(true);
@@ -132,12 +138,67 @@ export function Navbar() {
 
           <Link
             href="/dashboard"
-            className="inline-flex items-center justify-center text-xs font-semibold px-3 py-1.5 rounded-md bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"
+            className="hidden sm:inline-flex items-center justify-center text-xs font-semibold px-3 py-1.5 rounded-md bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"
           >
             Launch Live Demo
           </Link>
+
+          {/* Mobile Hamburger Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="lg:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400/50 transition-colors"
+            aria-expanded={isMobileMenuOpen}
+            aria-label="Toggle navigation menu"
+          >
+            {isMobileMenuOpen ? (
+              <X className="w-5 h-5" />
+            ) : (
+              <Menu className="w-5 h-5" />
+            )}
+          </button>
         </div>
       </div>
+
+      {/* Mobile Drawer Menu */}
+      {isMobileMenuOpen && (
+        <div className="lg:hidden border-b border-slate-800 bg-slate-950/95 backdrop-blur-xl px-4 pt-2 pb-6 space-y-1 shadow-2xl animate-in slide-in-from-top-2">
+          {navLinks.map((link) => {
+            const Icon = link.icon;
+            const active = pathname === link.href;
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  active
+                    ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                    : "text-slate-300 hover:text-white hover:bg-slate-800/60"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Icon className={`w-4 h-4 ${active ? "text-blue-400" : "text-slate-400"}`} />
+                  <span>{link.label}</span>
+                </div>
+                {active && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
+                    Active
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+
+          <div className="pt-3 border-t border-slate-800/80">
+            <Link
+              href="/dashboard"
+              className="w-full flex items-center justify-center text-xs font-bold py-2.5 rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"
+            >
+              Launch Live Decision Support
+            </Link>
+          </div>
+        </div>
+      )}
     </header>
   );
 }
