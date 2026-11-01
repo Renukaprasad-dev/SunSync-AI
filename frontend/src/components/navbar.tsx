@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sun, Zap, Sliders, LineChart, Cpu, CloudSun, History } from "lucide-react";
+import { Sun, Zap, Sliders, LineChart, Cpu, CloudSun, History, FileCheck } from "lucide-react";
 
 export function Navbar() {
   const pathname = usePathname();
@@ -11,6 +11,7 @@ export function Navbar() {
     { href: "/", label: "Overview", icon: Zap },
     { href: "/dashboard", label: "Dashboard", icon: LineChart },
     { href: "/history", label: "History", icon: History },
+    { href: "/bill-check", label: "Bill Check", icon: FileCheck },
     { href: "/simulator", label: "What-If Simulator", icon: Sliders },
     { href: "/setup", label: "Machine Setup", icon: Cpu },
     { href: "/forecast", label: "Solar Forecast", icon: CloudSun },

@@ -168,3 +168,32 @@ class OptimizationRunDetail(BaseModel):
     inputs: Dict[str, Any]
     results: Dict[str, Any]
     summary: Dict[str, Any]
+
+class BillRealityCheckRequest(BaseModel):
+    site_id: str = "00000000-0000-0000-0000-000000000001"
+    operating_days: int = Field(26, ge=1, le=31, description="Operating days in billing month")
+    real_energy_kwh: float = Field(..., gt=0, description="Total metered energy in kWh from real bill")
+    real_energy_charge_rs: float = Field(..., ge=0, description="Energy charge in Rs from real bill")
+    real_demand_kw: float = Field(..., gt=0, description="Peak recorded maximum demand in kW or kVA")
+    real_demand_charge_rs: float = Field(..., ge=0, description="Demand charge / fixed penalty in Rs from real bill")
+
+class BillComparisonMetric(BaseModel):
+    real: float
+    model_baseline: float
+    gap: float
+    gap_pct: float
+
+class BillRealityCheckResponse(BaseModel):
+    operating_days: int
+    real_total_bill_rs: float
+    model_baseline_total_bill_rs: float
+    total_bill_gap_rs: float
+    total_bill_gap_pct: float
+    metrics: Dict[str, BillComparisonMetric]
+    likely_causes: List[str]
+    sanity_status: str
+    disclaimer: str = (
+        "Order-of-magnitude sanity check for decision support only. "
+        "Not formal utility validation or billing audit. "
+        "Validate against official utility tariff orders and actual bills before operational reliance."
+    )

@@ -432,4 +432,28 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     const reloadedRateInput = reloadedTariffTable.locator("tbody tr").first().locator("input").nth(3);
     await expect(reloadedRateInput).toHaveValue("5.2");
   });
+
+  test("17. Bill Reality Check compares real monthly bill with scaled baseline estimate and displays likely causes with disclaimer", async ({ page }) => {
+    await page.goto("/bill-check");
+    await expect(page.locator("text=Utility Bill Reality Check")).toBeVisible({ timeout: 15000 });
+
+    // 1. Verify prominent Sanity Check Disclaimer
+    await expect(page.locator("text=Sanity Check Disclaimer — Not Formal Validation")).toBeVisible({ timeout: 5000 });
+
+    // 2. Click Load Sample BESCOM Bill
+    const sampleBtn = page.getByRole("button", { name: /Load Sample BESCOM Bill/i });
+    await expect(sampleBtn).toBeVisible();
+    await sampleBtn.click();
+
+    // 3. Trigger Reality Sanity Check calculation
+    const runBtn = page.getByRole("button", { name: /Run Reality Sanity Check/i });
+    await expect(runBtn).toBeVisible();
+    await runBtn.click();
+
+    // 4. Verify comparison metric cards and alignment badge
+    await expect(page.locator("text=Total Monthly Bill").first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("text=Billed Grid Energy").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Peak Recorded Demand").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=Observed Gaps & Probable Causes")).toBeVisible({ timeout: 5000 });
+  });
 });

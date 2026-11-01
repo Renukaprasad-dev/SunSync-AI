@@ -1,4 +1,4 @@
-import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse, SiteConfigPayload, SiteConfigResponse, OptimizationRunSummary, OptimizationRunDetail } from "./types";
+import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse, SiteConfigPayload, SiteConfigResponse, OptimizationRunSummary, OptimizationRunDetail, BillRealityCheckRequest, BillRealityCheckResponse } from "./types";
 import { slotToTime } from "./utils";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -356,4 +356,11 @@ export async function getOptimizationRuns(siteId?: string): Promise<Optimization
 
 export async function getOptimizationRun(runId: string): Promise<OptimizationRunDetail> {
   return fetchWithFallback<OptimizationRunDetail>(`/runs/${runId}`);
+}
+
+export async function checkBillReality(payload: BillRealityCheckRequest): Promise<BillRealityCheckResponse> {
+  return fetchWithFallback<BillRealityCheckResponse>("/billing/reality-check", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }

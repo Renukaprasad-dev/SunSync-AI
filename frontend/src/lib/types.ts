@@ -152,6 +152,34 @@ export interface OptimizationRunDetail extends OptimizationRunSummary {
   results: OptimizationResponse;
 }
 
+export interface BillComparisonMetric {
+  real: number;
+  model_baseline: number;
+  gap: number;
+  gap_pct: number;
+}
+
+export interface BillRealityCheckRequest {
+  site_id?: string;
+  operating_days: number;
+  real_energy_kwh: number;
+  real_energy_charge_rs: number;
+  real_demand_kw: number;
+  real_demand_charge_rs: number;
+}
+
+export interface BillRealityCheckResponse {
+  operating_days: number;
+  real_total_bill_rs: number;
+  model_baseline_total_bill_rs: number;
+  total_bill_gap_rs: number;
+  total_bill_gap_pct: number;
+  metrics: Record<string, BillComparisonMetric>;
+  likely_causes: string[];
+  sanity_status: string;
+  disclaimer: string;
+}
+
 export interface ForecastResponse {
   scenario: string;
   solar_forecast: number[];

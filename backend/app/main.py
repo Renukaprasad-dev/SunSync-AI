@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.db import repo
-from app.routers import sites, optimize, scenarios, forecast
+from app.routers import sites, optimize, scenarios, forecast, billing
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,3 +77,4 @@ app.include_router(sites.router)
 app.include_router(optimize.router)
 app.include_router(scenarios.router)
 app.include_router(forecast.router)
+app.include_router(billing.router)
