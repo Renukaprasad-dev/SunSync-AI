@@ -89,62 +89,8 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     await expect(page.locator("input[value='CNC Milling Center']")).toBeVisible({ timeout: 10000 });
   });
 
-  test("6. Setup page validates input boundaries and genuinely persists P_max and machines across reloads", async ({ page }) => {
-    let persistedPMax = 25.0;
-    let persistedMachines: any[] = [];
-
-    await page.route("**/sites/**", async (route, request) => {
-      const url = request.url();
-      const method = request.method();
-
-      if (method === "PUT" && url.endsWith("/00000000-0000-0000-0000-000000000001")) {
-        const body = request.postDataJSON();
-        persistedPMax = body.p_max_grid_kw;
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            id: "00000000-0000-0000-0000-000000000001",
-            name: "Machining & Stamping Unit Alpha",
-            p_max_grid_kw: persistedPMax,
-            storage_mode: "local_file"
-          })
-        });
-      } else if (method === "PUT" && url.includes("/machines")) {
-        persistedMachines = request.postDataJSON();
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(persistedMachines)
-        });
-      } else if (method === "PUT" && url.includes("/tariff")) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(request.postDataJSON())
-        });
-      } else if (method === "GET" && url.endsWith("/00000000-0000-0000-0000-000000000001")) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            id: "00000000-0000-0000-0000-000000000001",
-            name: "Machining & Stamping Unit Alpha",
-            p_max_grid_kw: persistedPMax,
-            storage_mode: "local_file"
-          })
-        });
-      } else if (method === "GET" && url.includes("/machines") && persistedMachines.length > 0) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(persistedMachines)
-        });
-      } else {
-        await route.continue();
-      }
-    });
-
+  test("6. Setup page genuinely persists P_max and machines against real FastAPI backend", async ({ page }) => {
+    // REAL API stack test (no page.route mocking)
     await page.goto("/setup");
     await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
 
@@ -154,15 +100,88 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
 
     // Click Save Changes
     const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await expect(saveBtn).toBeEnabled();
     await saveBtn.click();
 
-    // Verify "Saved Successfully!" appears
-    await expect(page.locator("text=Saved Successfully!")).toBeVisible();
+    // Verify Save success
+    await expect(page.locator("text=Saved Successfully!")).toBeVisible({ timeout: 10000 });
 
-    // Reload the page and verify P_max is still 24 kW!
+    // Reload page from live server
     await page.reload();
     await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
     const reloadedPMaxInput = page.locator("input[type='number']").first();
     await expect(reloadedPMaxInput).toHaveValue("24");
+
+    // Clean up / restore to 25.0 kW
+    await reloadedPMaxInput.fill("25");
+    const restoreBtn = page.getByRole("button", { name: /Save Changes/i });
+    await restoreBtn.click();
+    await expect(page.locator("text=Saved Successfully!")).toBeVisible({ timeout: 10000 });
+  });
+
+  test("7. Setup page handles 409 conflict, shows 'Reload Latest' banner, and keeps user edits", async ({ page }) => {
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    // Intercept config save to simulate concurrent 409 conflict
+    await page.route("**/sites/**/config", async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Conflict: Configuration has been modified by another session." })
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    const pMaxInput = page.locator("input[type='number']").first();
+    await pMaxInput.fill("21");
+
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await saveBtn.click();
+
+    // Verify conflict banner appears
+    await expect(page.locator("text=Conflict: Configuration has been modified")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("button", { name: "Reload Latest" })).toBeVisible();
+
+    // Assert "Saved Successfully!" was NOT displayed
+    await expect(page.locator("text=Saved Successfully!")).not.toBeVisible();
+
+    // Assert user's typed value was preserved in the form
+    await expect(pMaxInput).toHaveValue("21");
+  });
+
+  test("8. Setup page handles 500 server failure without false success, preserving user edits", async ({ page }) => {
+    await page.goto("/setup");
+    await expect(page.locator("text=Machine Inventory & Tariff Setup")).toBeVisible({ timeout: 15000 });
+
+    await page.route("**/sites/**/config", async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Internal database write error" })
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    const pMaxInput = page.locator("input[type='number']").first();
+    await pMaxInput.fill("19");
+
+    const saveBtn = page.getByRole("button", { name: /Save Changes/i });
+    await saveBtn.click();
+
+    // Assert error is displayed
+    await expect(page.locator("text=Internal database write error")).toBeVisible({ timeout: 5000 });
+
+    // Assert "Saved Successfully!" was NOT displayed
+    await expect(page.locator("text=Saved Successfully!")).not.toBeVisible();
+
+    // Assert user's input was preserved
+    await expect(pMaxInput).toHaveValue("19");
   });
 });

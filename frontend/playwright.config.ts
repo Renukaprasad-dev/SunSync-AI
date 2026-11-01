@@ -12,12 +12,20 @@ export default defineConfig({
     trace: "on-first-retry",
     headless: true,
   },
-  webServer: {
-    command: "npm run start",
-    url: "http://localhost:3000",
-    reuseExistingServer: !process.env.CI,
-    timeout: 60000,
-  },
+  webServer: [
+    {
+      command: "powershell -Command \"Set-Location ..\\backend; & .\\.venv\\Scripts\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000\"",
+      url: "http://127.0.0.1:8000/health",
+      reuseExistingServer: true,
+      timeout: 30000,
+    },
+    {
+      command: "npm run start",
+      url: "http://localhost:3000",
+      reuseExistingServer: true,
+      timeout: 60000,
+    },
+  ],
   projects: [
     {
       name: "chromium",

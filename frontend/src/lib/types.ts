@@ -30,6 +30,22 @@ export interface SiteUpdate {
   grid_emission_factor_kg_per_kwh?: number;
 }
 
+export interface SiteConfigPayload {
+  site: SiteUpdate;
+  machines: Machine[];
+  tariff: Tariff;
+  expected_version?: number;
+}
+
+export interface SiteConfigResponse {
+  site: Site;
+  machines: Machine[];
+  tariff: Tariff;
+  version: number;
+  storage_mode: string;
+  durable: boolean;
+}
+
 export interface Machine {
   id: string;
   name: string;

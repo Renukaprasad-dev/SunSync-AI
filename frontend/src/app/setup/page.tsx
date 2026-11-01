@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { Cpu, Plus, Trash2, Save, RefreshCw, Check, AlertCircle, Database } from "lucide-react";
-import { getHealth, getSite, updateSite, getMachines, updateMachines, getTariff, updateTariff } from "@/lib/api";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { Cpu, Plus, Trash2, Save, RefreshCw, Check, AlertCircle, Database, AlertTriangle } from "lucide-react";
+import { getHealth, getSiteConfig, updateSiteConfig } from "@/lib/api";
 import { Site, Machine, Tariff } from "@/lib/types";
 import { slotToTime } from "@/lib/utils";
 import { SimulationDisclaimer } from "@/components/disclaimer";
@@ -12,39 +12,69 @@ export default function SetupPage() {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [tariff, setTariff] = useState<Tariff | null>(null);
   const [pMax, setPMax] = useState<number>(25.0);
+  const [version, setVersion] = useState<number>(1);
   const [durable, setDurable] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [conflictError, setConflictError] = useState<boolean>(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [initialSnapshot, setInitialSnapshot] = useState<string>("");
+
+  const isDirty = useMemo(() => {
+    if (!initialSnapshot) return false;
+    return JSON.stringify({ pMax, machines, tariff }) !== initialSnapshot;
+  }, [pMax, machines, tariff, initialSnapshot]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setConflictError(false);
+    setValidationError(null);
+    setFieldErrors({});
+    try {
+      const [healthObj, configObj] = await Promise.all([
+        getHealth(),
+        getSiteConfig()
+      ]);
+      setDurable(healthObj.durable);
+      setSite(configObj.site);
+      setPMax(configObj.site.p_max_grid_kw ?? 25.0);
+      setMachines(configObj.machines);
+      setTariff(configObj.tariff);
+      setVersion(configObj.version || 1);
+      setInitialSnapshot(JSON.stringify({
+        pMax: configObj.site.p_max_grid_kw ?? 25.0,
+        machines: configObj.machines,
+        tariff: configObj.tariff
+      }));
+    } catch (err: any) {
+      console.error("Error loading setup:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      try {
-        const [healthObj, siteObj, mList, tObj] = await Promise.all([
-          getHealth(),
-          getSite(),
-          getMachines(),
-          getTariff()
-        ]);
-        setDurable(healthObj.durable);
-        setSite(siteObj);
-        setPMax(siteObj.p_max_grid_kw ?? 25.0);
-        setMachines(mList);
-        setTariff(tObj);
-      } catch (err: any) {
-        console.error("Error loading setup:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
     loadData();
-  }, []);
+  }, [loadData]);
+
+  // Warn on navigation/closing with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
 
   const handleMachineChange = (index: number, field: keyof Machine, val: any) => {
     setSaveSuccess(false);
     setValidationError(null);
+    setConflictError(false);
     const updated = [...machines];
     (updated[index] as any)[field] = val;
     setMachines(updated);
@@ -103,22 +133,36 @@ export default function SetupPage() {
     }
     setSaving(true);
     setValidationError(null);
+    setConflictError(false);
+    setFieldErrors({});
     setSaveSuccess(false);
     try {
       const siteId = site?.id || "00000000-0000-0000-0000-000000000001";
-      const [savedSite, savedMachines, savedTariff] = await Promise.all([
-        updateSite(siteId, { p_max_grid_kw: pMax }),
-        updateMachines(siteId, machines),
-        tariff ? updateTariff(siteId, tariff) : Promise.resolve(null)
-      ]);
-      setSite(savedSite);
-      setPMax(savedSite.p_max_grid_kw);
-      setMachines(savedMachines);
-      if (savedTariff) setTariff(savedTariff);
+      const savedConfig = await updateSiteConfig(siteId, {
+        site: { p_max_grid_kw: pMax },
+        machines,
+        tariff: tariff!,
+        expected_version: version
+      });
+
+      setSite(savedConfig.site);
+      setPMax(savedConfig.site.p_max_grid_kw);
+      setMachines(savedConfig.machines);
+      setTariff(savedConfig.tariff);
+      setVersion(savedConfig.version);
+      setInitialSnapshot(JSON.stringify({
+        pMax: savedConfig.site.p_max_grid_kw,
+        machines: savedConfig.machines,
+        tariff: savedConfig.tariff
+      }));
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (e: any) {
-      setValidationError(e?.message || "Failed to persist configuration changes.");
+      if (e?.message?.includes("409") || e?.message?.toLowerCase().includes("conflict")) {
+        setConflictError(true);
+      } else {
+        setValidationError(e?.message || "Failed to persist configuration changes.");
+      }
       setSaveSuccess(false);
     } finally {
       setSaving(false);
@@ -149,6 +193,9 @@ export default function SetupPage() {
               <Database className={`w-3 h-3 ${durable ? "text-emerald-400" : "text-amber-400"}`} />
               {site?.storage_mode === "supabase" ? "Supabase PostgreSQL (Durable)" : durable ? "Local File (Durable)" : "In-Memory (Non-durable)"}
             </span>
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 border border-slate-700 text-slate-400">
+              v{version}
+            </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
             Configure machine power ratings, availability start windows, factory grid limit, and strict production deadlines.
@@ -166,11 +213,13 @@ export default function SetupPage() {
 
           <button
             onClick={handleSave}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-sm"
+            disabled={saving || !isDirty}
+            className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold text-white shadow-sm transition-all ${
+              !isDirty ? "bg-slate-700 opacity-60 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-500"
+            }`}
           >
             {saveSuccess ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-            {saving ? "Saving..." : saveSuccess ? (durable ? "Saved Successfully!" : "Saved (temporary, demo mode)") : "Save Changes"}
+            {saving ? "Saving..." : saveSuccess ? (durable ? "Saved Successfully!" : "Saved (temporary, demo mode)") : isDirty ? "Save Changes*" : "Saved"}
           </button>
         </div>
       </div>
@@ -179,6 +228,21 @@ export default function SetupPage() {
         <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
           <span>Demo mode: changes are not permanently saved.</span>
+        </div>
+      )}
+
+      {conflictError && (
+        <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+            <span>Conflict: Configuration has been modified by another session. Please reload to avoid overwriting changes.</span>
+          </div>
+          <button
+            onClick={() => loadData()}
+            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded font-semibold text-[11px] shrink-0"
+          >
+            Reload Latest
+          </button>
         </div>
       )}
 

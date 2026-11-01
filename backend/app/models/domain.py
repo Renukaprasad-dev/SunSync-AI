@@ -19,6 +19,20 @@ class SiteUpdate(BaseModel):
     currency: Optional[str] = None
     grid_emission_factor_kg_per_kwh: Optional[float] = Field(None, ge=0.0)
 
+class SiteConfigPayload(BaseModel):
+    site: SiteUpdate
+    machines: List["Machine"]
+    tariff: "Tariff"
+    expected_version: Optional[int] = None
+
+class SiteConfigResponse(BaseModel):
+    site: Dict[str, Any]
+    machines: List["Machine"]
+    tariff: "Tariff"
+    version: int
+    storage_mode: str
+    durable: bool
+
 class Machine(BaseModel):
     id: str = Field(..., description="Unique machine identifier")
     name: str = Field(..., description="Machine display name")

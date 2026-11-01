@@ -1,4 +1,4 @@
-import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse } from "./types";
+import { Machine, Tariff, SolarProfile, OptimizationResponse, ForecastResponse, Site, SiteUpdate, HealthResponse, SiteConfigPayload, SiteConfigResponse } from "./types";
 import { slotToTime } from "./utils";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -228,6 +228,29 @@ export async function getHealth(): Promise<HealthResponse> {
     storage_mode: "memory",
     durable: false,
     supabase_configured: false
+  });
+}
+
+export async function getSiteConfig(siteId: string = "00000000-0000-0000-0000-000000000001"): Promise<SiteConfigResponse> {
+  return fetchWithFallback<SiteConfigResponse>(`/sites/${siteId}/config`, undefined, {
+    site: DEMO_SITE,
+    machines: DEMO_MACHINES,
+    tariff: {
+      rates: DEMO_TARIFF,
+      demand_charge_rate_per_kw: 20.0,
+      currency: "INR",
+      notes: "Karnataka ToD tariff placeholder."
+    },
+    version: 1,
+    storage_mode: "memory",
+    durable: false
+  });
+}
+
+export async function updateSiteConfig(siteId: string, payload: SiteConfigPayload): Promise<SiteConfigResponse> {
+  return fetchWithFallback<SiteConfigResponse>(`/sites/${siteId}/config`, {
+    method: "PUT",
+    body: JSON.stringify(payload)
   });
 }
 

@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import httpx
+from fastapi import HTTPException
 
 from app.models.domain import Machine, Tariff, SolarProfile
 from app.core.config import settings
@@ -33,7 +34,7 @@ class DataRepository:
     """
 
     def __init__(self, storage_mode: Optional[str] = None):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._explicit_mode = storage_mode
         self._sites: Dict[str, Dict[str, Any]] = {}
         self._machines: Dict[str, List[Machine]] = {}
@@ -84,7 +85,8 @@ class DataRepository:
             "p_max_grid_kw": 25.0,
             "solar_capacity_kw": 5.0,
             "currency": "INR",
-            "grid_emission_factor_kg_per_kwh": 0.8200
+            "grid_emission_factor_kg_per_kwh": 0.8200,
+            "version": 1
         }
 
         # 7 Demo Machines
@@ -321,6 +323,107 @@ class DataRepository:
 
         self._save_local_store()
         return current
+
+    def get_site_config(self, site_id: str) -> Optional[Dict[str, Any]]:
+        site = self.get_site(site_id)
+        if not site:
+            return None
+        machines = self.get_machines(site_id)
+        tariff = self.get_tariff(site_id)
+        version = site.get("version", 1)
+        return {
+            "site": site,
+            "machines": machines,
+            "tariff": tariff,
+            "version": version,
+            "storage_mode": self.storage_mode,
+            "durable": self.is_durable
+        }
+
+    def save_site_config(
+        self,
+        site_id: str,
+        site_data: Dict[str, Any],
+        machines: List[Machine],
+        tariff: Tariff,
+        expected_version: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Atomically saves site parameters, machines, and tariff with version conflict detection."""
+        clean_machines: List[Machine] = []
+        for m in machines:
+            m_dict = m.model_dump()
+            m_dict["id"] = ensure_uuid(m.id)
+            clean_machines.append(Machine(**m_dict))
+
+        if self.is_supabase_enabled:
+            try:
+                headers = self._get_supabase_headers()
+                rpc_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/rpc/save_site_configuration"
+                rpc_payload = {
+                    "p_site_id": site_id,
+                    "p_site_data": site_data,
+                    "p_machines": [m.model_dump() for m in clean_machines],
+                    "p_tariff": tariff.model_dump(),
+                    "p_expected_version": expected_version
+                }
+                resp = httpx.post(rpc_url, headers=headers, json=rpc_payload, timeout=5.0)
+                if resp.status_code == 409 or "version_conflict" in resp.text:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Conflict: Configuration has been modified by another session. Please reload latest."
+                    )
+                if resp.status_code not in (200, 201):
+                    raise RuntimeError(f"Supabase RPC save_site_configuration failed ({resp.status_code}): {resp.text}")
+
+                site = self.get_site(site_id)
+                self._machines[site_id] = clean_machines
+                self._tariffs[site_id] = tariff
+                return {
+                    "site": site,
+                    "machines": clean_machines,
+                    "tariff": tariff,
+                    "version": site.get("version", (expected_version or 1) + 1),
+                    "storage_mode": self.storage_mode,
+                    "durable": self.is_durable
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Supabase atomic save failed: {e}")
+                raise
+
+        with self._lock:
+            current_site = self._sites.get(site_id)
+            if not current_site:
+                current_site = {"id": site_id, "name": "Site", "location": "Unknown", "version": 1}
+                self._sites[site_id] = current_site
+
+            current_version = current_site.get("version", 1)
+            if expected_version is not None and expected_version != current_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Conflict: Configuration has been modified by another session (current version {current_version}, expected {expected_version}). Please reload latest."
+                )
+
+            current_site.update(site_data)
+            new_version = current_version + 1
+            current_site["version"] = new_version
+            current_site["storage_mode"] = self.storage_mode
+            current_site["durable"] = self.is_durable
+
+            self._machines[site_id] = clean_machines
+            self._tariffs[site_id] = tariff
+
+            self._save_local_store()
+
+            return {
+                "site": current_site,
+                "machines": clean_machines,
+                "tariff": tariff,
+                "version": new_version,
+                "storage_mode": self.storage_mode,
+                "durable": self.is_durable
+            }
 
     # 2. Machines
     def get_machines(self, site_id: str) -> List[Machine]:

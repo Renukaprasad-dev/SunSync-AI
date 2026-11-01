@@ -150,3 +150,89 @@ def test_supabase_machine_write_failure_is_not_silently_accepted(
 
     with pytest.raises(Exception):
         repository.save_machines(DEMO_SITE_ID, [machine])
+
+def test_supabase_tariff_write_failure_is_not_silently_accepted(
+    monkeypatch, tmp_path
+):
+    """A failed Supabase tariff write must raise an error."""
+    monkeypatch.setattr(
+        settings, "SUPABASE_URL", "https://mockproject.supabase.co"
+    )
+    monkeypatch.setattr(
+        settings, "SUPABASE_SERVICE_ROLE_KEY", "mock-service-key"
+    )
+
+    import app.core.db as db_module
+
+    monkeypatch.setattr(db_module, "LOCAL_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        db_module, "LOCAL_STORE_PATH", tmp_path / "local_store.json"
+    )
+
+    repository = DataRepository()
+
+    # No existing tariff: the repository should attempt an INSERT.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kwargs: httpx.Response(200, json=[]),
+    )
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(
+            500, json={"message": "simulated tariff write failure"}
+        ),
+    )
+
+    tariff = repository.get_tariff(DEMO_SITE_ID)
+
+    with pytest.raises(RuntimeError, match="Supabase save_tariff failed"):
+        repository.save_tariff(DEMO_SITE_ID, tariff)
+
+def test_supabase_site_write_failure_is_not_silently_accepted(
+    monkeypatch, tmp_path
+):
+    """A failed Supabase site update must raise an error."""
+    monkeypatch.setattr(
+        settings, "SUPABASE_URL", "https://mockproject.supabase.co"
+    )
+    monkeypatch.setattr(
+        settings, "SUPABASE_SERVICE_ROLE_KEY", "mock-service-key"
+    )
+
+    import app.core.db as db_module
+
+    monkeypatch.setattr(db_module, "LOCAL_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        db_module, "LOCAL_STORE_PATH", tmp_path / "local_store.json"
+    )
+
+    repository = DataRepository()
+
+    # Return the existing site so update_site() has a valid record.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kwargs: httpx.Response(
+            200,
+            json=[{
+                "id": DEMO_SITE_ID,
+                "name": "Test Factory",
+                "location": "Bengaluru",
+                "p_max_grid_kw": 25.0,
+            }],
+        ),
+    )
+
+    # Simulate a failed Supabase update.
+    monkeypatch.setattr(
+        httpx,
+        "patch",
+        lambda url, **kwargs: httpx.Response(
+            500, json={"message": "simulated site write failure"}
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Supabase update_site failed"):
+        repository.update_site(DEMO_SITE_ID, {"p_max_grid_kw": 20.0})
