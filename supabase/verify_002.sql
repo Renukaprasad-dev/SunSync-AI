@@ -31,6 +31,14 @@ BEGIN
     END IF;
     RAISE NOTICE 'SUCCESS: save_site_configuration RPC function is registered.';
 
+    -- Verify alias RPC functions exist
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_proc WHERE proname = 'save_site_configuration_atomic'
+    ) THEN
+        RAISE EXCEPTION 'Verification Failed: save_site_configuration_atomic alias RPC function does not exist.';
+    END IF;
+    RAISE NOTICE 'SUCCESS: save_site_configuration_atomic alias RPC function is registered.';
+
     RAISE NOTICE '=== 2. Testing transactional save execution ===';
     -- Get or create demo site
     SELECT id, version INTO v_site_id, v_current_version FROM sites LIMIT 1;

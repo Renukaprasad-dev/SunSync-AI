@@ -353,7 +353,7 @@ During Phase 2, every claim from the initial audit report was re-evaluated again
 
 Three test files were modified during Phase 2 to align with production architectural improvements:
 
-#### 1. `frontend/tests/demo.spec.ts`
+#### 1. `frontend/e2e/demo.spec.ts` (Playwright E2E Test Suite)
 - **Change:** Changed locator from checking mocked response fallbacks to interacting with the live backend. In test 6 (save persistence), updated the locator from `/Save Configuration/i` to `/Save Changes/i` because the UI button dynamically indicates dirty state with `"Save Changes*"`.
 - **Integrity Assessment:** Assertion was **not loosened**. It now tests real end-to-end network requests and persists changes across live browser reloads against a real running FastAPI instance.
 

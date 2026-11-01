@@ -1,8 +1,11 @@
--- Supabase Migration: 002_atomic_site_config_rpc.sql
+-- Supabase Migration: 002_atomic_config_rpc.sql
 -- Atomic site configuration save with optimistic concurrency control.
 
 ALTER TABLE public.sites
     ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE public.sites
+    ADD COLUMN IF NOT EXISTS site_version INTEGER DEFAULT 1;
 
 CREATE OR REPLACE FUNCTION public.save_site_configuration(
     p_site_id UUID,
@@ -93,6 +96,7 @@ BEGIN
            name = COALESCE(p_site_data->>'name', name),
            location = COALESCE(p_site_data->>'location', location),
            version = v_new_version,
+           site_version = v_new_version,
            updated_at = NOW()
      WHERE id = p_site_id;
 
@@ -273,3 +277,41 @@ REVOKE ALL ON FUNCTION
 GRANT EXECUTE ON FUNCTION
     public.save_site_configuration(UUID, JSONB, JSONB, JSONB, INTEGER)
     TO service_role;
+
+-- Canonical aliases for save_site_configuration
+CREATE OR REPLACE FUNCTION public.save_site_configuration_atomic(
+    p_site_id UUID,
+    p_site_data JSONB,
+    p_machines JSONB,
+    p_tariff JSONB,
+    p_expected_version INTEGER DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+    SELECT public.save_site_configuration(p_site_id, p_site_data, p_machines, p_tariff, p_expected_version);
+$$;
+
+REVOKE ALL ON FUNCTION public.save_site_configuration_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.save_site_configuration_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.save_site_config_atomic(
+    p_site_id UUID,
+    p_site_data JSONB,
+    p_machines JSONB,
+    p_tariff JSONB,
+    p_expected_version INTEGER DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+    SELECT public.save_site_configuration(p_site_id, p_site_data, p_machines, p_tariff, p_expected_version);
+$$;
+
+REVOKE ALL ON FUNCTION public.save_site_config_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.save_site_config_atomic(UUID, JSONB, JSONB, JSONB, INTEGER) TO service_role;
+

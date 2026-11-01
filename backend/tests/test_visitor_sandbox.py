@@ -110,7 +110,8 @@ def test_sandbox_cleanup_does_not_delete_shared_demo_site(monkeypatch):
     repo = DataRepository(storage_mode="supabase")
 
     # Create an expired visitor site (age > 24 hours)
-    old_site_id = repo.clone_demo_site_for_visitor(visitor_id="old-visitor")
+    old_visitor_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    old_site_id = repo.clone_demo_site_for_visitor(visitor_id=old_visitor_id)
     repo._sites[old_site_id]["created_at"] = 1000.0 # Way in the past
 
     # Run cleanup with 3600s TTL
@@ -124,3 +125,18 @@ def test_sandbox_cleanup_does_not_delete_shared_demo_site(monkeypatch):
     assert DEMO_SITE_ID in repo._sites
     assert repo.get_site(DEMO_SITE_ID) is not None
     assert not any(DEMO_SITE_ID in url for url in deleted_urls)
+
+def test_short_spoofed_visitor_ids_rejected():
+    """Visitor session IDs shorter than 32 hex characters must be rejected with 400 Bad Request."""
+    repo = DataRepository()
+
+    for invalid_id in ["short-id", "abc123", "12345", "", "a" * 31]:
+        with pytest.raises(HTTPException) as exc_clone:
+            repo.clone_demo_site_for_visitor(visitor_id=invalid_id)
+        assert exc_clone.value.status_code == 400
+        assert "Invalid visitor session ID" in exc_clone.value.detail or "required" in exc_clone.value.detail
+
+        with pytest.raises(HTTPException) as exc_get:
+            repo.get_site_for_visitor(site_id=DEMO_SITE_ID, visitor_id=invalid_id)
+        assert exc_get.value.status_code == 400
+

@@ -753,11 +753,23 @@ class DataRepository:
     # 6. Visitor Sandbox Scoping & Lifecycle
     DEMO_SITE_ID = "00000000-0000-0000-0000-000000000001"
 
+    def _validate_visitor_id(self, visitor_id: Optional[str]) -> str:
+        if not visitor_id:
+            raise HTTPException(status_code=400, detail="Visitor session ID is required.")
+        cleaned = visitor_id.replace("-", "").strip()
+        if len(cleaned) < 32:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid visitor session ID: must be at least 32 characters to prevent spoofing."
+            )
+        return visitor_id
+
     def get_site_for_visitor(self, site_id: str, visitor_id: str) -> Dict[str, Any]:
         """Returns site with visitor scoping:
         - Demo site (DEMO_SITE_ID) is publicly readable by all visitors.
         - Visitor sandbox sites can only be read by their creator/owner.
         """
+        self._validate_visitor_id(visitor_id)
         site = self.get_site(site_id)
         if not site:
             raise HTTPException(status_code=404, detail=f"Site {site_id} not found.")
@@ -772,6 +784,7 @@ class DataRepository:
 
     def clone_demo_site_for_visitor(self, visitor_id: str) -> str:
         """Clones the shared demo site into a visitor-scoped sandbox site."""
+        self._validate_visitor_id(visitor_id)
         new_site_id = str(uuid.uuid4())
         demo_site = self.get_site(self.DEMO_SITE_ID) or {
             "name": "Peenya Precision Engineering (Demo Unit)",
@@ -840,6 +853,7 @@ class DataRepository:
         1. Direct mutation of the shared seeded demo site is rejected (403 Forbidden).
         2. Visitor A cannot modify visitor B's sandbox site (403 Forbidden).
         """
+        self._validate_visitor_id(visitor_id)
         if site_id == self.DEMO_SITE_ID:
             raise HTTPException(
                 status_code=403,
