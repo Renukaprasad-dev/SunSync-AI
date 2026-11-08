@@ -13,11 +13,18 @@ export function Navbar() {
   const [healthStatus, setHealthStatus] = useState<"checking" | "connected" | "ephemeral" | "offline">("checking");
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const [sessionRestarted, setSessionRestarted] = useState(false);
 
   // Close mobile drawer on route navigation
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    const onSessionRestarted = () => setSessionRestarted(true);
+    window.addEventListener("sunsync-session-restarted", onSessionRestarted);
+    return () => window.removeEventListener("sunsync-session-restarted", onSessionRestarted);
+  }, []);
 
   const checkHealth = useCallback(async () => {
     setIsRefreshing(true);
@@ -56,6 +63,12 @@ export function Navbar() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-800 bg-slate-950/80 backdrop-blur-md">
+      {sessionRestarted && (
+        <div role="status" className="bg-amber-950/80 border-b border-amber-700/50 px-4 py-2 text-center text-xs text-amber-200">
+          Your anonymous session expired. A new private workspace was started; the previous workspace is not linked to it.
+          <button className="ml-2 underline" onClick={() => setSessionRestarted(false)}>Dismiss</button>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 group">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 shadow-md shadow-amber-500/20 group-hover:scale-105 transition-transform">

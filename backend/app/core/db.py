@@ -1,10 +1,12 @@
 import copy
 import json
 import logging
+import math
 import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import httpx
@@ -19,6 +21,22 @@ LOCAL_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _env_store = os.environ.get("LOCAL_STORE_PATH")
 LOCAL_STORE_PATH = Path(_env_store).resolve() if _env_store else LOCAL_DATA_DIR / "local_store.json"
 
+
+class SiteCreationLimitReached(Exception):
+    """Raised when an owner already has the configured number of sites."""
+
+
+class DatabaseMigrationRequired(Exception):
+    """Raised when a required database RPC/function is missing from the database."""
+    def __init__(self, rpc_name: str, migration_hint: str):
+        super().__init__(f"Database migration required: RPC '{rpc_name}' is not found ({migration_hint}).")
+        self.rpc_name = rpc_name
+        self.migration_hint = migration_hint
+
+
+class DatabaseUnavailable(Exception):
+    """Raised when the remote database is unreachable or times out."""
+
 def ensure_uuid(val: str) -> str:
     """Ensures string is a valid UUID; converts non-UUID strings deterministically."""
     try:
@@ -27,6 +45,98 @@ def ensure_uuid(val: str) -> str:
     except (ValueError, TypeError):
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, str(val)))
 
+
+def _derive_summary_from_results(results: Any) -> Dict[str, Any]:
+    """Extract baseline cost, optimized cost, savings percentage, and peak demand
+    from actual saved strategy results when summary is missing, incomplete, or empty."""
+    if not isinstance(results, dict):
+        return {}
+
+    strategies = results.get("strategies")
+    if not isinstance(strategies, dict) or not strategies:
+        return {}
+
+    def _safe_float(val: Any) -> Optional[float]:
+        try:
+            if val is not None:
+                f = float(val)
+                if not (math.isnan(f) or math.isinf(f)):
+                    return f
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    def _safe_int(val: Any) -> Optional[int]:
+        try:
+            if val is not None:
+                return int(val)
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    baseline = strategies.get("baseline") if isinstance(strategies.get("baseline"), dict) else None
+    opt = (
+        strategies.get("cost_optimized") if isinstance(strategies.get("cost_optimized"), dict)
+        else (strategies.get("solar_aware") if isinstance(strategies.get("solar_aware"), dict) else None)
+    )
+
+    b_kpis = baseline.get("kpis") if baseline and isinstance(baseline.get("kpis"), dict) else None
+    opt_kpis = opt.get("kpis") if opt and isinstance(opt.get("kpis"), dict) else None
+
+    b_cost = _safe_float(b_kpis.get("daily_cost_rs")) if b_kpis else None
+    opt_cost = _safe_float(opt_kpis.get("daily_cost_rs")) if opt_kpis else None
+
+    b_peak = _safe_float(b_kpis.get("peak_grid_demand_kw")) if b_kpis else None
+    opt_peak = _safe_float(opt_kpis.get("peak_grid_demand_kw")) if opt_kpis else None
+
+    violations = None
+    if opt_kpis and opt_kpis.get("deadline_violations") is not None:
+        violations = _safe_int(opt_kpis.get("deadline_violations"))
+    elif b_kpis and b_kpis.get("deadline_violations") is not None:
+        violations = _safe_int(b_kpis.get("deadline_violations"))
+
+    derived: Dict[str, Any] = {}
+    if b_cost is not None:
+        derived["baseline_cost"] = round(b_cost, 2)
+    if opt_cost is not None:
+        derived["optimized_cost"] = round(opt_cost, 2)
+
+    if b_cost is not None and opt_cost is not None:
+        if b_cost > 0:
+            derived["savings_pct"] = round(((b_cost - opt_cost) / b_cost * 100.0), 2)
+        else:
+            derived["savings_pct"] = 0.0
+
+    if b_peak is not None:
+        derived["baseline_peak_kw"] = round(b_peak, 2)
+    if opt_peak is not None:
+        derived["optimized_peak_kw"] = round(opt_peak, 2)
+    if violations is not None:
+        derived["deadline_violations"] = violations
+
+    return derived
+
+
+def _resolve_run_summary(summary: Any, results: Any) -> Dict[str, Any]:
+    """Resolves summary metrics: preserves existing valid summary fields and backfills
+    any missing metrics derived directly from the saved strategy results."""
+    derived = _derive_summary_from_results(results)
+
+    if isinstance(summary, dict) and summary:
+        # Check if existing summary has any valid finite metrics
+        has_metrics = any(
+            summary.get(k) is not None and isinstance(summary.get(k), (int, float)) and not math.isnan(summary[k])
+            for k in ("baseline_cost", "optimized_cost", "savings_pct", "optimized_peak_kw", "baseline_peak_kw")
+        )
+        if has_metrics:
+            # Preserve existing summary, only filling keys that were absent in summary
+            merged = dict(derived)
+            merged.update(summary)
+            return merged
+
+    return derived
+
+
 class DataRepository:
     """Unified repository for SunSync AI data.
     Directly persists to Supabase (PostgreSQL REST API) when SUPABASE_URL and
@@ -34,6 +144,7 @@ class DataRepository:
     store when running locally; runs in non-durable memory mode on serverless (Vercel)
     when Supabase credentials are not supplied.
     """
+    DEMO_SITE_ID = "00000000-0000-0000-0000-000000000001"
 
     def __init__(self, storage_mode: Optional[str] = None):
         self._lock = threading.RLock()
@@ -253,6 +364,14 @@ class DataRepository:
                 if "tariffs" in data:
                     for s_id, t_dict in data["tariffs"].items():
                         self._tariffs[s_id] = Tariff(**t_dict)
+                if "solar_profiles" in data:
+                    for s_id, profiles in data["solar_profiles"].items():
+                        self._solar_profiles[s_id] = {
+                            scenario: SolarProfile(**profile)
+                            for scenario, profile in profiles.items()
+                        }
+                if "base_loads" in data:
+                    self._base_loads.update(data["base_loads"])
                 if "optimization_runs" in data:
                     self._optimization_runs = data["optimization_runs"]
                 logger.info(f"Loaded locally persisted configuration from {LOCAL_STORE_PATH}")
@@ -272,6 +391,11 @@ class DataRepository:
                     "sites": self._sites,
                     "machines": {s_id: [m.model_dump() for m in m_list] for s_id, m_list in self._machines.items()},
                     "tariffs": {s_id: t.model_dump() for s_id, t in self._tariffs.items()},
+                    "solar_profiles": {
+                        s_id: {scenario: profile.model_dump() for scenario, profile in profiles.items()}
+                        for s_id, profiles in self._solar_profiles.items()
+                    },
+                    "base_loads": self._base_loads,
                     "optimization_runs": self._optimization_runs[:100]
                 }
                 tmp_path = LOCAL_STORE_PATH.with_suffix(".tmp")
@@ -311,7 +435,51 @@ class DataRepository:
                 logger.warning(f"Supabase get_site failed ({e}); falling back to local store.")
         return self._sites.get(site_id) or self._sites.get("00000000-0000-0000-0000-000000000001")
 
+    def touch_owned_site(self, site_id: str, owner_session_id: str) -> bool:
+        """Refresh the cleanup timestamp when a valid session is renewed."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        if self.is_supabase_enabled:
+            url = (
+                f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites"
+                f"?id=eq.{site_id}&owner_session_id=eq.{owner_session_id}"
+            )
+            try:
+                response = httpx.patch(
+                    url,
+                    headers=self._get_supabase_headers(),
+                    json={"updated_at": timestamp},
+                    timeout=5.0,
+                )
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as net_err:
+                raise DatabaseUnavailable(f"Database connection error: {type(net_err).__name__}") from net_err
+
+            if response.status_code not in (200, 204):
+                raise RuntimeError(f"Supabase session activity update failed ({response.status_code}).")
+            rows = response.json() if response.content else []
+            if not rows:
+                return False
+            with self._lock:
+                if site_id in self._sites:
+                    self._sites[site_id]["updated_at"] = timestamp
+            return True
+
+        with self._lock:
+            site = self._sites.get(site_id)
+            if not site or site.get("owner_session_id") != owner_session_id:
+                return False
+            site["updated_at"] = timestamp
+            self._save_local_store()
+            return True
+
     def create_site(self, site_data: Dict[str, Any]) -> Dict[str, Any]:
+        owner_session_id = site_data.get("owner_session_id")
+        if owner_session_id:
+            return self.create_owned_site(
+                site_data,
+                owner_session_id=owner_session_id,
+                max_sites=settings.SITE_CREATION_LIMIT_PER_SESSION,
+            )
+
         s_id = site_data.get("id") or str(uuid.uuid4())
         site_data["id"] = s_id
 
@@ -332,7 +500,83 @@ class DataRepository:
         self._save_local_store()
         return site_data
 
+    def _remember_created_site(self, site_data: Dict[str, Any]) -> Dict[str, Any]:
+        s_id = site_data["id"]
+        with self._lock:
+            self._sites[s_id] = site_data
+            self._machines[s_id] = copy.deepcopy(self._machines.get(self.DEMO_SITE_ID, []))
+            self._tariffs[s_id] = copy.deepcopy(self._tariffs.get(self.DEMO_SITE_ID))
+            self._solar_profiles[s_id] = copy.deepcopy(self._solar_profiles.get(self.DEMO_SITE_ID, {}))
+            self._base_loads[s_id] = copy.deepcopy(self._base_loads.get(self.DEMO_SITE_ID, []))
+            self._save_local_store()
+        return site_data
+
+    def create_owned_site(
+        self,
+        site_data: Dict[str, Any],
+        owner_session_id: str,
+        max_sites: int,
+    ) -> Dict[str, Any]:
+        """Create an owned site subject to a per-session limit.
+
+        Local modes serialize count-and-create within this repository instance.
+        Supabase delegates the operation to a transaction-scoped advisory-lock RPC.
+        """
+        if not owner_session_id or max_sites < 1:
+            raise ValueError("A non-empty owner and positive site limit are required.")
+        created_at = datetime.now(timezone.utc).isoformat()
+        site_data = {
+            **site_data,
+            "owner_session_id": owner_session_id,
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        site_data.setdefault("id", str(uuid.uuid4()))
+
+        if self.is_supabase_enabled:
+            rpc_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/rpc/create_owned_site_with_limit"
+            try:
+                response = httpx.post(
+                    rpc_url,
+                    headers=self._get_supabase_headers(),
+                    json={
+                        "p_site_data": site_data,
+                        "p_owner_session_id": owner_session_id,
+                        "p_max_sites": max_sites,
+                    },
+                    timeout=5.0,
+                )
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as net_err:
+                raise DatabaseUnavailable(f"Database connection error: {type(net_err).__name__}") from net_err
+
+            if response.status_code == 404:
+                raise DatabaseMigrationRequired(
+                    rpc_name="create_owned_site_with_limit",
+                    migration_hint="Apply migration 004_site_limits_and_session_cleanup.sql to Supabase."
+                )
+            if response.status_code not in (200, 201):
+                raise RuntimeError(f"Supabase create_owned_site failed ({response.status_code}).")
+            result = response.json()
+            if result.get("limit_reached") is True:
+                raise SiteCreationLimitReached
+            created = result.get("site")
+            if not isinstance(created, dict):
+                raise RuntimeError("Supabase create_owned_site returned an invalid response.")
+            return self._remember_created_site(created)
+
+        # This lock makes count-and-create atomic for this repository instance.
+        # A local JSON file shared by separate processes has no cross-process lock.
+        with self._lock:
+            owned_count = sum(
+                1 for site in self._sites.values()
+                if site.get("owner_session_id") == owner_session_id
+            )
+            if owned_count >= max_sites:
+                raise SiteCreationLimitReached
+            return self._remember_created_site(site_data)
+
     def update_site(self, site_id: str, site_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        site_data = {**site_data, "updated_at": datetime.now(timezone.utc).isoformat()}
         current = self.get_site(site_id)
         if not current:
             current = {"id": site_id, "name": "Site", "location": "Unknown"}
@@ -394,7 +638,7 @@ class DataRepository:
         if self.is_supabase_enabled:
             try:
                 headers = self._get_supabase_headers()
-                rpc_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/rpc/save_site_configuration"  # canonical function name
+                rpc_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/rpc/save_site_configuration"
                 rpc_payload = {
                     "p_site_id": site_id,
                     "p_site_data": site_data,
@@ -444,6 +688,7 @@ class DataRepository:
             current_site.update(site_data)
             new_version = current_version + 1
             current_site["version"] = new_version
+            current_site["updated_at"] = datetime.now(timezone.utc).isoformat()
             current_site["storage_mode"] = self.storage_mode
             current_site["durable"] = self.is_durable
 
@@ -482,6 +727,20 @@ class DataRepository:
             m_dict = m.model_dump()
             m_dict["id"] = ensure_uuid(m.id)
             clean_machines.append(Machine(**m_dict))
+
+        incoming_ids = {machine.id for machine in clean_machines}
+        if self.is_supabase_enabled and incoming_ids:
+            ids_filter = ",".join(incoming_ids)
+            check_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/machines?id=in.({ids_filter})&select=id,site_id"
+            check_response = httpx.get(check_url, headers=self._get_supabase_headers(), timeout=3.0)
+            if check_response.status_code != 200:
+                raise HTTPException(status_code=503, detail="Could not verify machine ownership.")
+            if any(row.get("site_id") != site_id for row in check_response.json()):
+                raise HTTPException(status_code=403, detail="A machine ID belongs to another site.")
+        elif incoming_ids:
+            for other_site_id, other_machines in self._machines.items():
+                if other_site_id != site_id and incoming_ids.intersection(machine.id for machine in other_machines):
+                    raise HTTPException(status_code=403, detail="A machine ID belongs to another site.")
 
         self._machines[site_id] = clean_machines
         self._save_local_store()
@@ -669,26 +928,32 @@ class DataRepository:
         with self._lock:
             runs_copy = list(self._optimization_runs)
 
+        if self.is_supabase_enabled:
+            try:
+                url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/optimization_runs?select=*&order=created_at.desc&limit={limit}"
+                response = httpx.get(url, headers=self._get_supabase_headers(), timeout=3.0)
+                if response.status_code == 200:
+                    runs_copy = response.json()
+            except Exception as e:
+                logger.warning("Supabase optimization history lookup failed: %s", type(e).__name__)
+
         for run in runs_copy:
             run_site_id = run.get("site_id")
             run_visitor_id = run.get("visitor_id")
 
             # Check if this run belongs to another visitor's private sandbox site
             site = self.get_site(run_site_id) if run_site_id else None
-            site_owner = site.get("owner_session_id") if site else None
-
-            if site_owner and visitor_id and site_owner != visitor_id:
-                # Private to another visitor -> skip
+            if not site or site.get("id") != run_site_id:
+                continue
+            site_owner = site.get("owner_session_id")
+            if run_site_id != self.DEMO_SITE_ID and (not site_owner or not visitor_id or site_owner != visitor_id):
                 continue
 
             if site_id and run_site_id != site_id:
                 continue
 
-            if visitor_id and run_visitor_id and run_visitor_id != visitor_id and run_site_id != self.DEMO_SITE_ID:
-                continue
-
-            # Produce summary item
-            summary = run.get("summary") or {}
+            # Produce summary item with automatic derivation if missing
+            summary = _resolve_run_summary(run.get("summary"), run.get("results"))
             filtered.append({
                 "id": run.get("id"),
                 "site_id": run_site_id,
@@ -719,6 +984,8 @@ class DataRepository:
                 resp = httpx.get(url, headers=headers, timeout=3.0)
                 if resp.status_code == 200 and resp.json():
                     row = resp.json()[0]
+                    raw_summary = row.get("summary") or row.get("inputs", {}).get("summary")
+                    results = row.get("results", {})
                     run = {
                         "id": row["id"],
                         "site_id": row["site_id"],
@@ -729,8 +996,8 @@ class DataRepository:
                         "verifier_passed": row["verifier_passed"],
                         "created_at": row["created_at"],
                         "inputs": row.get("inputs", {}),
-                        "results": row.get("results", {}),
-                        "summary": row.get("inputs", {}).get("summary", {})
+                        "results": results,
+                        "summary": _resolve_run_summary(raw_summary, results)
                     }
             except Exception as e:
                 logger.warning(f"Supabase fetch optimization_run {run_id} failed: {e}")
@@ -741,13 +1008,15 @@ class DataRepository:
         # Check access security
         run_site_id = run.get("site_id")
         site = self.get_site(run_site_id) if run_site_id else None
-        site_owner = site.get("owner_session_id") if site else None
-        if site_owner and visitor_id and site_owner != visitor_id:
+        site_owner = site.get("owner_session_id") if site and site.get("id") == run_site_id else None
+        if run_site_id != self.DEMO_SITE_ID and (not site_owner or not visitor_id or site_owner != visitor_id):
             raise HTTPException(
-                status_code=403,
-                detail="Forbidden: Cannot access optimization runs from another visitor's sandbox."
+                status_code=404,
+                detail="Optimization run not found."
             )
 
+        run = dict(run)
+        run["summary"] = _resolve_run_summary(run.get("summary"), run.get("results"))
         return run
 
     # 6. Visitor Sandbox Scoping & Lifecycle
@@ -814,10 +1083,7 @@ class DataRepository:
 
         new_tariff = demo_tariff.model_copy()
 
-        if self.is_supabase_enabled:
-            headers = self._get_supabase_headers()
-            site_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites"
-            site_payload = {
+        site_payload = {
                 "id": new_site_id,
                 "name": new_site["name"],
                 "location": new_site.get("location", "Bengaluru"),
@@ -828,14 +1094,47 @@ class DataRepository:
                 "owner_session_id": visitor_id,
                 "version": 1
             }
-            resp = httpx.post(site_url, headers=headers, json=site_payload, timeout=3.0)
-            if resp.status_code not in (200, 201):
-                raise RuntimeError(f"Supabase clone site failed ({resp.status_code}): {resp.text}")
+        created_site = self.create_owned_site(
+            site_payload,
+            owner_session_id=visitor_id,
+            max_sites=settings.SITE_CREATION_LIMIT_PER_SESSION,
+        )
+        new_site.update(created_site)
+
+        if self.is_supabase_enabled:
+            site_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1/sites"
+            try:
+                saved = self.save_site_config(
+                    site_id=new_site_id,
+                    site_data={key: value for key, value in site_payload.items() if key not in {"id", "owner_session_id", "version"}},
+                    machines=new_machines,
+                    tariff=new_tariff,
+                    expected_version=1,
+                )
+                new_site = saved["site"] or new_site
+            except Exception:
+                try:
+                    httpx.delete(
+                        f"{site_url}?id=eq.{new_site_id}&owner_session_id=eq.{visitor_id}",
+                        headers=self._get_supabase_headers(),
+                        timeout=3.0,
+                    )
+                except Exception:
+                    pass
+                with self._lock:
+                    self._sites.pop(new_site_id, None)
+                    self._machines.pop(new_site_id, None)
+                    self._tariffs.pop(new_site_id, None)
+                    self._solar_profiles.pop(new_site_id, None)
+                    self._base_loads.pop(new_site_id, None)
+                raise
 
         with self._lock:
             self._sites[new_site_id] = new_site
             self._machines[new_site_id] = new_machines
             self._tariffs[new_site_id] = new_tariff
+            self._solar_profiles[new_site_id] = copy.deepcopy(self._solar_profiles[self.DEMO_SITE_ID])
+            self._base_loads[new_site_id] = copy.deepcopy(self._base_loads[self.DEMO_SITE_ID])
             self._save_local_store()
 
         return new_site_id
@@ -873,10 +1172,15 @@ class DataRepository:
 
         return self.save_site_config(site_id, site_data, machines, tariff, expected_version)
 
-    def cleanup_expired_sandboxes(self, max_age_seconds: int = 86400) -> int:
-        """Purges visitor sandbox sites older than TTL.
-        CRITICAL: NEVER deletes the shared seeded demo site (DEMO_SITE_ID).
+    def cleanup_expired_sandboxes(self, max_age_seconds: Optional[int] = None) -> int:
+        """Purge stale visitor sites without expiring any currently valid session.
+
+        The bearer token is not stored in the repository, so cleanup uses a cutoff
+        at least one hour longer than the configured token lifetime. Session renewal
+        refreshes ``updated_at``. The shared seeded demo is always preserved.
         """
+        safe_cutoff = settings.SESSION_TOKEN_TTL_SECONDS + 3600
+        effective_max_age = max(max_age_seconds or 0, safe_cutoff)
         now = time.time()
         purged = 0
         with self._lock:
@@ -885,15 +1189,30 @@ class DataRepository:
                 if s_id == self.DEMO_SITE_ID:
                     continue  # NEVER delete shared demo site!
                 owner = s_data.get("owner_session_id")
-                created_at = s_data.get("created_at", 0)
-                if owner and (now - created_at > max_age_seconds):
+                last_seen = s_data.get("updated_at", s_data.get("created_at", 0))
+                if isinstance(last_seen, str):
+                    try:
+                        last_seen = datetime.fromisoformat(last_seen.replace("Z", "+00:00")).timestamp()
+                    except ValueError:
+                        continue
+                if owner and (now - float(last_seen or 0) > effective_max_age):
                     to_delete.append(s_id)
 
             for s_id in to_delete:
                 del self._sites[s_id]
                 self._machines.pop(s_id, None)
                 self._tariffs.pop(s_id, None)
-                purged += 1
+                self._solar_profiles.pop(s_id, None)
+                self._base_loads.pop(s_id, None)
+            if to_delete:
+                expired_site_ids = set(to_delete)
+                self._optimization_runs = [
+                    run for run in self._optimization_runs
+                    if run.get("site_id") not in expired_site_ids
+                ]
+                # Persist all local structures after the in-memory removals.
+                self._save_local_store()
+                purged += len(to_delete)
 
             if self.is_supabase_enabled and to_delete:
                 headers = self._get_supabase_headers()
@@ -903,9 +1222,6 @@ class DataRepository:
                         httpx.delete(del_url, headers=headers, timeout=3.0)
                     except Exception as e:
                         logger.warning(f"Failed to delete expired sandbox {s_id} from Supabase: {e}")
-
-            if purged > 0:
-                self._save_local_store()
 
         return purged
 

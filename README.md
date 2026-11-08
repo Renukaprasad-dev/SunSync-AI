@@ -74,7 +74,7 @@ Small and medium manufacturing enterprises (SMEs) face punishing electricity cos
 
 ### 4.1 Optimization Run History (`/history`)
 - Every execution of `POST /optimize` is recorded with input hashes, strategy KPIs (cost, peak demand, savings), solver solve time, and verifier status.
-- Scoped to visitor sandbox sessions so multi-user public visits remain isolated.
+- Scoped to the signed anonymous session that created each private site; other sessions cannot list or reopen its runs.
 - 1-click **"Reopen in Dashboard"** to reload and review any past dispatch run and Gantt schedule.
 
 ### 4.2 Time-of-Day (ToD) Tariff Slab Editor (`/setup`)
@@ -108,7 +108,7 @@ SunSync AI features a tri-mode storage architecture defined by the `STORAGE_MODE
 
 | Mode | Target | Durability | Description |
 | :--- | :--- | :--- | :--- |
-| `supabase` | Supabase PostgreSQL REST | **Durable** | Used in production. Full ACID persistence via PostgreSQL and atomic RPC functions. |
+| `supabase` | Supabase PostgreSQL REST | **Durable** | Production target. PostgreSQL persistence and atomic RPC functions. |
 | `local_file` | `backend/app/data/local_store.json` | **Durable (Local Dev)** | Persists to disk across restarts. Safe for single-instance local development. |
 | `memory` | In-memory Python dictionaries | **Ephemeral** | Ephemeral fallback for test runners or serverless environments without Supabase. |
 
@@ -129,9 +129,7 @@ The backend provides a structured health diagnostic:
 ```
 
 ### Public Sandbox & Visitor Session Isolation
-To enable safe public demonstrations on Vercel without data vandalism:
-1. **Read-Only Demo Site (`00000000-0000-0000-0000-000000000001`):** In `supabase` mode, mutating the default demo site is restricted to prevent overwriting shared presentation presets.
-2. **Copy-on-Write Visitor Sandboxing:** Unauthenticated visitors receive a unique `X-Visitor-Session-Id` header (and matching `sunsync_visitor_session` cookie). Custom configurations and optimization runs are scoped to this visitor session in-memory, providing a fully functional isolated experience without polluting database records.
+The checked-in FastAPI routes issue signed, expiring anonymous bearer sessions and use the verified subject to authorize private site-owned resources. The shared demo is readable through the API and API writes to it are rejected. This describes the repository code only; it does not verify production security. Before enabling public production writes, verify the production environment variables (including `SESSION_SIGNING_SECRET` and the exact `ALLOWED_ORIGINS`), deployed route behavior, effective Supabase policies, and all direct database access paths and credentials.
 
 ---
 
@@ -143,23 +141,27 @@ To initialize a Supabase project, execute the SQL migration scripts in the Supab
 1. supabase/migrations/001_initial_schema.sql
 2. supabase/seed.sql
 3. supabase/migrations/002_atomic_config_rpc.sql
-4. supabase/verify_002.sql  (Verification test script)
+4. supabase/migrations/003_visitor_sandbox_ownership.sql
+5. supabase/migrations/004_site_limits_and_session_cleanup.sql
+6. supabase/verify_002.sql (Verification script; review before use)
 ```
 
 ### Migration Verification (`verify_002.sql`)
-`002_atomic_config_rpc.sql` creates the idempotent PostgreSQL function:
+`002_atomic_config_rpc.sql` creates the canonical RPC `save_site_configuration`, which the backend calls. `sites.version` is the concurrency field read and written by the backend. The legacy `sites.site_version` column is preserved and synchronized for compatibility; wrapper RPC aliases are retained for older callers. Do not drop legacy objects until the deployed database and all external callers have been checked.
+
+The RPC accepts these parameters:
 ```sql
-save_site_configuration_atomic(
+save_site_configuration(
   p_site_id UUID,
-  p_expected_version INTEGER,
   p_site_data JSONB,
   p_machines JSONB,
-  p_tariff JSONB
+  p_tariff JSONB,
+  p_expected_version INTEGER
 )
 ```
 This guarantees:
 - **Atomicity:** Site profile, machine inventory, and tariff slabs update together in a single transaction. A failure in any table rolls back the entire operation.
-- **Optimistic Concurrency Control:** Compares `p_expected_version` against `sites.site_version`. If a stale save is detected, it raises an exception (`VERSION_CONFLICT:409`) leaving existing records untouched.
+- **Optimistic Concurrency Control:** Compares `p_expected_version` against `sites.version`. If a stale save is detected, it raises a version conflict and leaves existing records untouched.
 
 Run `supabase/verify_002.sql` in the Supabase SQL editor to confirm the function signature, verify atomic updates, and test 409 conflict detection without leaving orphan test records.
 
@@ -258,6 +260,9 @@ Vercel enforces a strict **250 MB** uncompressed limit on serverless functions.
 | `SUPABASE_URL` | For `supabase` | `""` | Supabase project REST URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | For `supabase` | `""` | Supabase service role key (backend-only, never expose) |
 | `ALLOWED_ORIGINS` | Yes | `http://localhost:3000` | Comma-separated CORS allowed origins |
+| `SESSION_SIGNING_SECRET` | Yes | none | Backend-only random signing key, at least 32 bytes; required for anonymous sessions |
+| `SESSION_TOKEN_TTL_SECONDS` | No | `604800` | Anonymous bearer session lifetime in seconds (7 days) |
+| `SESSION_ISSUANCE_MAX_REQUESTS` | No | `10` | Per-instance new-session requests per IP per minute |
 | `INTERVALS_PER_DAY` | No | `96` | Number of 15-minute intervals per 24 hours |
 | `INTERVAL_MINUTES` | No | `15` | Interval resolution in minutes |
 | `SOLVER_TIME_LIMIT_SECONDS` | No | `8.0` | Serverless MILP solver execution ceiling |
@@ -273,7 +278,7 @@ Vercel enforces a strict **250 MB** uncompressed limit on serverless functions.
 
 ## 10. Step-by-Step Vercel Deployment
 
-Deploy SunSync AI as **two separate Vercel projects** from the single GitHub repository (`https://github.com/Renukaprasad-dev/SunSync-AI`).
+The repository documents two separate Vercel projects: backend root `backend` using `backend/vercel.json`, and Next.js frontend root `frontend` using `frontend/vercel.json`. There is no root `vercel.json`. Actual Vercel dashboard project roots and overrides are external settings and must be checked before deployment.
 
 ### 10.1 Backend Deployment (FastAPI Serverless)
 1. Go to [Vercel Dashboard](https://vercel.com/dashboard) and click **Add New... -> Project**.
@@ -286,7 +291,8 @@ Deploy SunSync AI as **two separate Vercel projects** from the single GitHub rep
    - `STORAGE_MODE`: `supabase`
    - `SUPABASE_URL`: `https://<your-project>.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY`: `<your-supabase-service-role-key>`
-   - `ALLOWED_ORIGINS`: `http://localhost:3000` (update with frontend URL after frontend deployment)
+   - `ALLOWED_ORIGINS`: `https://<your-frontend-domain>` (include local origins only where needed)
+   - `SESSION_SIGNING_SECRET`: a randomly generated backend-only value of at least 32 bytes
    - `SOLVER_TIME_LIMIT_SECONDS`: `8.0`
 5. Click **Deploy**.
 6. Verify deployment by visiting `https://<sunsync-backend>.vercel.app/health`. Confirm `storage_mode: "supabase"` and `durable: true`.
@@ -306,8 +312,9 @@ Deploy SunSync AI as **two separate Vercel projects** from the single GitHub rep
 1. In the `sunsync-backend` Vercel project -> **Settings -> Environment Variables**.
 2. Update `ALLOWED_ORIGINS` to:
    ```
-   http://localhost:3000,https://<sunsync-frontend>.vercel.app
+   https://<your-exact-frontend-domain>
    ```
+   Add local origins only in local development. The backend uses bearer headers, disables cookie credentials, and rejects wildcard production CORS.
 3. Redeploy the backend.
 4. Run live smoke verification:
    ```bash

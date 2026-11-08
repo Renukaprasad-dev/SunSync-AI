@@ -16,7 +16,7 @@ import {
   Printer
 } from "lucide-react";
 
-import { runOptimization, getOptimizationRun, getSiteConfig } from "@/lib/api";
+import { runOptimization, getOptimizationRun, getSiteConfig, getSolarProfile, getBaseLoad } from "@/lib/api";
 import { OptimizationResponse, StrategySchedule } from "@/lib/types";
 import { KPICard, DeadlineViolationsCard } from "@/components/kpi-card";
 import { LoadDispatchChart } from "@/components/charts/load-dispatch-chart";
@@ -33,76 +33,117 @@ export default function DashboardPage() {
   const [selectedStrategy, setSelectedStrategy] = useState<"cost_optimized" | "solar_aware" | "baseline">("cost_optimized");
   const [isReopened, setIsReopened] = useState<boolean>(false);
   const [reopenedMeta, setReopenedMeta] = useState<{ id?: string; created_at?: string; scenario?: string; solver_name?: string } | null>(null);
+  const [resultSource, setResultSource] = useState<"live" | "cache" | "history">("live");
+  const [siteLabel, setSiteLabel] = useState("Configured site");
+  const [replayRunId, setReplayRunId] = useState<string | null>(null);
 
   // Initialize and persist strategy tab selection across reloads via localStorage
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const savedStrategy = localStorage.getItem("sunsync_dashboard_strategy");
-      if (savedStrategy === "cost_optimized" || savedStrategy === "solar_aware" || savedStrategy === "baseline") {
-        setSelectedStrategy(savedStrategy);
-      }
-    }
+    try {
+      const savedStrategy = window.localStorage.getItem("sunsync_dashboard_strategy");
+      if (savedStrategy === "cost_optimized" || savedStrategy === "solar_aware" || savedStrategy === "baseline") setSelectedStrategy(savedStrategy);
+    } catch { /* Browser storage is optional. */ }
   }, []);
 
   const handleStrategyChange = (strat: "cost_optimized" | "solar_aware" | "baseline") => {
     setSelectedStrategy(strat);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("sunsync_dashboard_strategy", strat);
+    try { window.localStorage.setItem("sunsync_dashboard_strategy", strat); } catch { /* Browser storage is optional. */ }
+  };
+
+  const stableSerialize = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(",")}}`;
     }
+    return JSON.stringify(value) ?? "null";
   };
 
-  // Cache optimize results keyed by (site_version, scenario, tariff_hash) in sessionStorage.
-  // Editing the config bumps site.version → new cache key → stale result is never served.
-  const buildCacheKey = (version: number, scenario: string, tariffHash: string) =>
-    `sunsync_opt_v2_${version}_${scenario}_${tariffHash}`;
+  const isOptimizationResponse = (value: unknown): value is OptimizationResponse => {
+    if (!value || typeof value !== "object") return false;
+    const response = value as OptimizationResponse;
+    if (!response.strategies || typeof response.strategies !== "object") return false;
 
-  const quickTariffHash = (rates: number[]): string => {
-    // XOR-fold the 96 rate values into a short numeric fingerprint.
-    const h = rates.reduce((acc, r, i) => acc ^ ((Math.round(r * 100) + i * 31) & 0xffff), 0);
-    return h.toString(16).padStart(4, "0");
+    const strategyEntries = Object.entries(response.strategies);
+    if (strategyEntries.length === 0) return false;
+
+    const supportedStrategies = new Set(["baseline", "solar_aware", "cost_optimized"]);
+
+    return strategyEntries.every(([name, strategy]) => {
+      if (!supportedStrategies.has(name) || !strategy || typeof strategy !== "object") return false;
+
+      // KPIs validation
+      if (!strategy.kpis || typeof strategy.kpis !== "object") return false;
+      const kpisValid = Object.values(strategy.kpis).every((n) => n === undefined || Number.isFinite(n));
+      if (!kpisValid) return false;
+
+      // Machine schedules validation
+      if (!Array.isArray(strategy.machine_schedules)) return false;
+
+      // 96-interval profile validations
+      const profiles = [
+        strategy.load_profile,
+        strategy.grid_profile,
+        strategy.solar_profile,
+        strategy.solar_used_profile
+      ];
+      return profiles.every((profile) =>
+        Array.isArray(profile) &&
+        profile.length === 96 &&
+        profile.every((n) => Number.isFinite(n))
+      );
+    });
   };
 
+  // Cache values are scoped to the resolved site and a canonical snapshot of every solver input.
   const fetchOptimization = async (forceRefresh: boolean = false) => {
-    // Step 1: fetch current site config to build a version-aware cache key.
-    let cacheKey = "sunsync_opt_v2_unknown";
-    try {
-      const cfg = await getSiteConfig();
-      const version = cfg.version ?? 1;
-      const tariffRates: number[] = cfg.tariff?.rates ?? [];
-      const tariffHash = tariffRates.length === 96 ? quickTariffHash(tariffRates) : "notariff";
-      cacheKey = buildCacheKey(version, "sunny", tariffHash);
-    } catch {
-      // Cannot reach backend; let the main fetch surface the error.
-    }
-
-    if (!forceRefresh && typeof window !== "undefined") {
-      const cached = sessionStorage.getItem(cacheKey);
-      if (cached) {
-        try {
-          setData(JSON.parse(cached));
-          setLoading(false);
-          return;
-        } catch {
-          // fallback to fetch
-        }
-      }
-    }
-
     setLoading(true);
     setError(null);
+    let cacheKey: string | null = null;
+    let fingerprint: string | null = null;
     try {
+      try {
+        const [config, solar, baseLoad] = await Promise.all([getSiteConfig(), getSolarProfile(undefined, "sunny"), getBaseLoad()]);
+        const site = config.site;
+        setSiteLabel(`${site.name}${site.location ? ` · ${site.location}` : ""}`);
+        cacheKey = `sunsync_opt_v3_${encodeURIComponent(site.id)}_sunny`;
+        const siteInputs = {
+          id: site.id,
+          p_max_grid_kw: site.p_max_grid_kw,
+          solar_capacity_kw: site.solar_capacity_kw,
+          grid_emission_factor_kg_per_kwh: site.grid_emission_factor_kg_per_kwh
+        };
+        fingerprint = stableSerialize({ site: siteInputs, siteVersion: config.version, machines: config.machines, tariff: config.tariff, solar, baseLoad, scenario: "sunny", strategies: ["baseline", "solar_aware", "cost_optimized"] });
+        if (!forceRefresh && typeof window !== "undefined") {
+          try {
+            const stored = sessionStorage.getItem(cacheKey);
+            const cached = stored ? JSON.parse(stored) : null;
+            if (cached?.fingerprint === fingerprint && isOptimizationResponse(cached?.result)) {
+              setData(cached.result);
+              setResultSource("cache");
+              setLoading(false);
+              return;
+            }
+          } catch {
+            // Storage may be unavailable or contain stale or malformed data; fetch fresh.
+          }
+        }
+      } catch {
+        // Still attempt the live optimization; an input snapshot is only needed for caching.
+      }
       const resp = await runOptimization({
         scenario: "sunny",
         strategies: ["baseline", "solar_aware", "cost_optimized"]
       });
+      if (!isOptimizationResponse(resp)) throw new Error("Backend returned an invalid optimization result.");
       setData(resp);
-      if (typeof window !== "undefined") {
-        // Store under the versioned key and clean up any previous keys for this tab.
-        const prefix = "sunsync_opt_v2_";
-        Object.keys(sessionStorage)
-          .filter((k) => k.startsWith(prefix) && k !== cacheKey)
-          .forEach((k) => sessionStorage.removeItem(k));
-        sessionStorage.setItem(cacheKey, JSON.stringify(resp));
+      setResultSource("live");
+      if (cacheKey && fingerprint && typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ fingerprint, result: resp }));
+        } catch {
+          // Storage is an optional performance optimization.
+        }
       }
     } catch (err: any) {
       setError(err?.message || "Failed to load optimization schedule.");
@@ -118,23 +159,22 @@ export default function DashboardPage() {
       const reopened = params.get("reopened");
 
       if (reopened && runId) {
-        const cached = sessionStorage.getItem("sunsync_reopened_run");
-        const cachedMeta = sessionStorage.getItem("sunsync_reopened_meta");
-        if (cached) {
-          try {
-            setData(JSON.parse(cached));
-            setIsReopened(true);
-            if (cachedMeta) setReopenedMeta(JSON.parse(cachedMeta));
-            setLoading(false);
-            return;
-          } catch {
-            // fallback to fetch
-          }
-        }
+        setReplayRunId(runId);
+        setLoading(true);
+        setError(null);
         getOptimizationRun(runId)
           .then((res) => {
+            if (!isOptimizationResponse(res.results)) throw new Error("Saved run contains an invalid optimization result.");
             setData(res.results);
             setIsReopened(true);
+            setResultSource("history");
+            const availableKeys = Object.keys(res.results.strategies || {});
+            if (!res.results.strategies[selectedStrategy] && availableKeys.length > 0) {
+              const preferred = (availableKeys.includes("cost_optimized")
+                ? "cost_optimized"
+                : availableKeys[0]) as "cost_optimized" | "solar_aware" | "baseline";
+              setSelectedStrategy(preferred);
+            }
             setReopenedMeta({
               id: res.id,
               created_at: res.created_at,
@@ -142,8 +182,8 @@ export default function DashboardPage() {
               solver_name: res.solver_name
             });
           })
-          .catch(() => {
-            fetchOptimization();
+          .catch((err) => {
+            setError(err?.message || "Could not load the saved optimization run.");
           })
           .finally(() => {
             setLoading(false);
@@ -155,8 +195,9 @@ export default function DashboardPage() {
   }, []);
 
   const downloadCSV = () => {
-    if (!data || !data.strategies[selectedStrategy]) return;
-    const strat = data.strategies[selectedStrategy]!;
+    if (!data) return;
+    const strat = data.strategies[selectedStrategy] || data.strategies.cost_optimized || Object.values(data.strategies)[0];
+    if (!strat) return;
     const emissionFactor = strat.kpis.grid_emission_factor_kg_per_kwh || 0.82;
     const avoidedCo2 = strat.kpis.avoided_co2_kg ?? Number((strat.kpis.solar_energy_used_kwh * emissionFactor).toFixed(2));
     const rows = [
@@ -197,6 +238,31 @@ export default function DashboardPage() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(blobUrl);
+  };
+
+  const retryFailedLoad = async () => {
+    if (!replayRunId) return fetchOptimization(true);
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await getOptimizationRun(replayRunId);
+      if (!isOptimizationResponse(res.results)) throw new Error("Saved run contains an invalid optimization result.");
+      setData(res.results);
+      setIsReopened(true);
+      setResultSource("history");
+      const availableKeys = Object.keys(res.results.strategies || {});
+      if (!res.results.strategies[selectedStrategy] && availableKeys.length > 0) {
+        const preferred = (availableKeys.includes("cost_optimized")
+          ? "cost_optimized"
+          : availableKeys[0]) as "cost_optimized" | "solar_aware" | "baseline";
+        setSelectedStrategy(preferred);
+      }
+      setReopenedMeta({ id: res.id, created_at: res.created_at, scenario: res.scenario, solver_name: res.solver_name });
+    } catch (err: any) {
+      setError(err?.message || "Could not load the saved optimization run.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) {
@@ -246,36 +312,39 @@ export default function DashboardPage() {
     );
   }
 
-  if (error || !data) {
+  const availableStrategies = data?.strategies ? Object.keys(data.strategies) : [];
+  if (error || !data || availableStrategies.length === 0) {
     return (
       <div className="py-16 text-center space-y-4 bg-slate-900/40 rounded-xl border border-slate-800 p-8">
-        <p className="text-rose-400 text-sm font-semibold">Error loading optimization: {error}</p>
+        <p className="text-rose-400 text-sm font-semibold">Error loading optimization: {error || "No valid strategy data found in optimization run."}</p>
         <button
-          onClick={() => fetchOptimization(true)}
+          onClick={retryFailedLoad}
           className="px-4 py-2 bg-blue-600 text-white rounded-md text-xs font-semibold hover:bg-blue-500"
         >
-          Retry Optimization
+          {replayRunId ? "Retry Historical Replay" : "Retry Optimization"}
         </button>
       </div>
     );
   }
 
-  const baseStrat = data.strategies.baseline!;
-  const currentStrat = data.strategies[selectedStrategy] || baseStrat;
+  const baseStrat = (data.strategies.baseline || data.strategies[selectedStrategy] || data.strategies[availableStrategies[0]])!;
+  const currentStrat = data.strategies[selectedStrategy] || data.strategies.cost_optimized || baseStrat;
   const baseKpi = baseStrat.kpis;
   const currKpi = currentStrat.kpis;
 
-  // Compute live deltas vs baseline
-  const costDelta = currKpi.daily_cost_rs - baseKpi.daily_cost_rs;
-  const costDeltaPct = ((costDelta / baseKpi.daily_cost_rs) * 100).toFixed(1);
+  const hasBaselineComparison = Boolean(data.strategies.baseline?.kpis && currentStrat !== data.strategies.baseline);
 
-  const peakDelta = currKpi.peak_grid_demand_kw - baseKpi.peak_grid_demand_kw;
-  const peakDeltaPct = ((peakDelta / baseKpi.peak_grid_demand_kw) * 100).toFixed(1);
+  // Compute live deltas vs baseline if baseline exists
+  const costDelta = (currKpi.daily_cost_rs ?? 0) - (baseKpi.daily_cost_rs ?? 0);
+  const costDeltaPct = (baseKpi.daily_cost_rs ?? 0) > 0 ? ((costDelta / (baseKpi.daily_cost_rs ?? 0)) * 100).toFixed(1) : "0.0";
 
-  const solarDelta = currKpi.solar_energy_used_kwh - baseKpi.solar_energy_used_kwh;
-  const solarDeltaPct = baseKpi.solar_energy_used_kwh > 0 
-    ? ((solarDelta / baseKpi.solar_energy_used_kwh) * 100).toFixed(1) 
-    : "+100";
+  const peakDelta = (currKpi.peak_grid_demand_kw ?? 0) - (baseKpi.peak_grid_demand_kw ?? 0);
+  const peakDeltaPct = (baseKpi.peak_grid_demand_kw ?? 0) > 0 ? ((peakDelta / (baseKpi.peak_grid_demand_kw ?? 0)) * 100).toFixed(1) : "0.0";
+
+  const solarDelta = (currKpi.solar_energy_used_kwh ?? 0) - (baseKpi.solar_energy_used_kwh ?? 0);
+  const solarDeltaPct = (baseKpi.solar_energy_used_kwh ?? 0) > 0
+    ? ((solarDelta / (baseKpi.solar_energy_used_kwh ?? 0)) * 100).toFixed(1)
+    : "+0.0";
 
   return (
     <div className="space-y-6 py-2">
@@ -298,8 +367,10 @@ export default function DashboardPage() {
           <button
             onClick={() => {
               if (typeof window !== "undefined") {
-                sessionStorage.removeItem("sunsync_reopened_run");
-                sessionStorage.removeItem("sunsync_reopened_meta");
+                try {
+                  sessionStorage.removeItem("sunsync_reopened_run");
+                  sessionStorage.removeItem("sunsync_reopened_meta");
+                } catch { /* Browser storage is optional. */ }
                 const url = new URL(window.location.href);
                 url.searchParams.delete("reopened");
                 url.searchParams.delete("runId");
@@ -307,6 +378,7 @@ export default function DashboardPage() {
               }
               setIsReopened(false);
               setReopenedMeta(null);
+              setReplayRunId(null);
               fetchOptimization();
             }}
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs rounded-lg transition-colors shrink-0"
@@ -323,11 +395,11 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-extrabold text-white tracking-tight">Industrial Scheduling Dashboard</h1>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-              Live MILP Optimal
+              {resultSource === "history" ? "Historical Result" : resultSource === "cache" ? "Cached Simulation" : "Optimization Completed"}
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Site: <strong className="text-slate-300">Peenya Precision Engineering (Demo Unit)</strong> • 96 intervals (15-min grid)
+            Site: <strong className="text-slate-300">{siteLabel}</strong> • 96 intervals (15-min grid)
           </p>
         </div>
 
@@ -368,7 +440,10 @@ export default function DashboardPage() {
               <Coins className="w-3.5 h-3.5" /> Strategy Optimization Delta
             </div>
             <div className="text-sm text-slate-300">
-              Active: <span className="font-semibold text-white">{currentStrat.display_title}</span> vs <span className="text-slate-400">Baseline (Earliest Start)</span>
+              Active: <span className="font-semibold text-white">{currentStrat?.display_title || "Selected Strategy"}</span>
+              {hasBaselineComparison && (
+                <> vs <span className="text-slate-400">Baseline (Earliest Start)</span></>
+              )}
             </div>
           </div>
 
@@ -390,15 +465,15 @@ export default function DashboardPage() {
             <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
               <div className="text-[10px] text-slate-400 uppercase font-semibold">Solar Utilized</div>
               <div className="text-sm font-extrabold text-amber-400">
-                {currKpi.solar_self_consumption_pct}%
-                <span className="text-[11px] font-normal text-slate-400 ml-1">({currKpi.solar_energy_used_kwh} kWh)</span>
+                {currKpi.solar_self_consumption_pct ?? 0}%
+                <span className="text-[11px] font-normal text-slate-400 ml-1">({currKpi.solar_energy_used_kwh ?? 0} kWh)</span>
               </div>
             </div>
 
             <div className="bg-slate-950/70 border border-slate-800 px-3 py-2 rounded-lg text-center">
               <div className="text-[10px] text-slate-400 uppercase font-semibold">Avoided CO2</div>
               <div className="text-sm font-extrabold text-emerald-400">
-                {currKpi.avoided_co2_kg ?? (currKpi.solar_energy_used_kwh * 0.82).toFixed(1)} kg
+                {currKpi.avoided_co2_kg ?? ((currKpi.solar_energy_used_kwh ?? 0) * (currKpi.grid_emission_factor_kg_per_kwh || 0.82)).toFixed(1)} kg
               </div>
               <div className="text-[9px] text-slate-400 font-normal leading-tight mt-0.5">
                 Estimated CO2 avoided based on {currKpi.grid_emission_factor_kg_per_kwh || 0.82} kg/kWh grid factor
@@ -410,89 +485,95 @@ export default function DashboardPage() {
 
       {/* Strategy Toggle Tabs */}
       <div className="flex flex-wrap items-center gap-2 p-1 bg-slate-900 border border-slate-800 rounded-xl">
-        <button
-          onClick={() => handleStrategyChange("cost_optimized")}
-          className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-            selectedStrategy === "cost_optimized"
-              ? "bg-blue-600 text-white shadow-md"
-              : "text-slate-400 hover:text-white"
-          }`}
-        >
-          <Coins className="w-3.5 h-3.5" />
-          <span>Cost-Optimized Strategy</span>
-          <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-blue-700/80 text-blue-100">ToD + Peak Arbitrage</span>
-        </button>
+        {Boolean(data.strategies.cost_optimized) && (
+          <button
+            onClick={() => handleStrategyChange("cost_optimized")}
+            className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              selectedStrategy === "cost_optimized"
+                ? "bg-blue-600 text-white shadow-md"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Coins className="w-3.5 h-3.5" />
+            <span>Cost-Optimized Strategy</span>
+            <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-blue-700/80 text-blue-100">ToD + Peak Arbitrage</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => handleStrategyChange("solar_aware")}
-          className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-            selectedStrategy === "solar_aware"
-              ? "bg-amber-500 text-slate-950 shadow-md font-extrabold"
-              : "text-slate-400 hover:text-white"
-          }`}
-        >
-          <Sun className="w-3.5 h-3.5" />
-          <span>Solar-Aware Strategy</span>
-          <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-amber-600/30 text-amber-300">Max Self-Consumption</span>
-        </button>
+        {Boolean(data.strategies.solar_aware) && (
+          <button
+            onClick={() => handleStrategyChange("solar_aware")}
+            className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              selectedStrategy === "solar_aware"
+                ? "bg-amber-500 text-slate-950 shadow-md font-extrabold"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Sun className="w-3.5 h-3.5" />
+            <span>Solar-Aware Strategy</span>
+            <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-amber-600/30 text-amber-300">Max Self-Consumption</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => handleStrategyChange("baseline")}
-          className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-            selectedStrategy === "baseline"
-              ? "bg-slate-700 text-white shadow-md"
-              : "text-slate-400 hover:text-white"
-          }`}
-        >
-          <Layers className="w-3.5 h-3.5" />
-          <span>Baseline (Earliest Start)</span>
-          <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">Unoptimized Reference</span>
-        </button>
+        {Boolean(data.strategies.baseline) && (
+          <button
+            onClick={() => handleStrategyChange("baseline")}
+            className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              selectedStrategy === "baseline"
+                ? "bg-slate-700 text-white shadow-md"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Baseline (Earliest Start)</span>
+            <span className="hidden sm:inline text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">Unoptimized Reference</span>
+          </button>
+        )}
       </div>
 
       {/* KPI Cards Row */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
         <KPICard
           label="Daily Electricity Cost"
-          value={formatRs(currKpi.daily_cost_rs)}
-          baseValue={formatRs(baseKpi.daily_cost_rs)}
-          deltaText={selectedStrategy !== "baseline" ? `${costDeltaPct}% (${formatRs(Math.abs(costDelta))})` : undefined}
+          value={formatRs(currKpi.daily_cost_rs ?? 0)}
+          baseValue={hasBaselineComparison && baseKpi ? formatRs(baseKpi.daily_cost_rs ?? 0) : undefined}
+          deltaText={hasBaselineComparison ? `${costDeltaPct}% (${formatRs(Math.abs(costDelta))})` : undefined}
           isPositiveBenefit={costDelta <= 0}
           badge="Computed"
         />
 
         <KPICard
           label="Peak Grid Demand"
-          value={`${currKpi.peak_grid_demand_kw}`}
+          value={`${currKpi.peak_grid_demand_kw ?? 0}`}
           unit="kW"
-          baseValue={`${baseKpi.peak_grid_demand_kw} kW`}
-          deltaText={selectedStrategy !== "baseline" ? `${peakDeltaPct}% (${peakDelta.toFixed(1)} kW)` : undefined}
+          baseValue={hasBaselineComparison && baseKpi ? `${baseKpi.peak_grid_demand_kw ?? 0} kW` : undefined}
+          deltaText={hasBaselineComparison ? `${peakDeltaPct}% (${peakDelta.toFixed(1)} kW)` : undefined}
           isPositiveBenefit={peakDelta <= 0}
           badge="Max Slot"
         />
 
         <KPICard
           label="Solar Consumed On-Site"
-          value={`${currKpi.solar_energy_used_kwh}`}
+          value={`${currKpi.solar_energy_used_kwh ?? 0}`}
           unit="kWh"
-          baseValue={`${baseKpi.solar_energy_used_kwh} kWh`}
-          deltaText={selectedStrategy !== "baseline" ? `+${solarDelta.toFixed(1)} kWh (${solarDeltaPct}%)` : undefined}
+          baseValue={hasBaselineComparison && baseKpi ? `${baseKpi.solar_energy_used_kwh ?? 0} kWh` : undefined}
+          deltaText={hasBaselineComparison ? `+${solarDelta.toFixed(1)} kWh (${solarDeltaPct}%)` : undefined}
           isPositiveBenefit={solarDelta >= 0}
-          badge={`${currKpi.solar_self_consumption_pct}% Total Solar`}
+          badge={`${currKpi.solar_self_consumption_pct ?? 0}% Total Solar`}
         />
 
         <KPICard
           label="Net Grid Imported"
-          value={`${currKpi.grid_energy_imported_kwh}`}
+          value={`${currKpi.grid_energy_imported_kwh ?? 0}`}
           unit="kWh"
-          baseValue={`${baseKpi.grid_energy_imported_kwh} kWh`}
-          deltaText={selectedStrategy !== "baseline" ? `${(currKpi.grid_energy_imported_kwh - baseKpi.grid_energy_imported_kwh).toFixed(1)} kWh` : undefined}
-          isPositiveBenefit={currKpi.grid_energy_imported_kwh <= baseKpi.grid_energy_imported_kwh}
-          subtext={`Avoided: ${currKpi.avoided_co2_kg ?? (currKpi.solar_energy_used_kwh * 0.82).toFixed(1)} kg CO2 | Grid: ${currKpi.estimated_co2_kg} kg`}
+          baseValue={hasBaselineComparison && baseKpi ? `${baseKpi.grid_energy_imported_kwh ?? 0} kWh` : undefined}
+          deltaText={hasBaselineComparison && baseKpi ? `${((currKpi.grid_energy_imported_kwh ?? 0) - (baseKpi.grid_energy_imported_kwh ?? 0)).toFixed(1)} kWh` : undefined}
+          isPositiveBenefit={baseKpi ? (currKpi.grid_energy_imported_kwh ?? 0) <= (baseKpi.grid_energy_imported_kwh ?? 0) : true}
+          subtext={`Avoided: ${currKpi.avoided_co2_kg ?? ((currKpi.solar_energy_used_kwh ?? 0) * (currKpi.grid_emission_factor_kg_per_kwh || 0.82)).toFixed(1)} kg CO2 | Grid: ${currKpi.estimated_co2_kg ?? 0} kg`}
         />
 
         <div className="col-span-2 md:col-span-1">
-          <DeadlineViolationsCard count={currKpi.deadline_violations} />
+          <DeadlineViolationsCard count={currKpi.deadline_violations ?? 0} />
         </div>
       </div>
 
@@ -503,30 +584,30 @@ export default function DashboardPage() {
         gridProfile={currentStrat.grid_profile}
         solarProfile={currentStrat.solar_profile}
         solarUsedProfile={currentStrat.solar_used_profile}
-        peakKw={currKpi.peak_grid_demand_kw}
+        peakKw={currKpi.peak_grid_demand_kw ?? 0}
       />
 
       {/* Gantt Production Schedule Chart */}
       <GanttScheduleChart
         baselineSchedules={baseStrat.machine_schedules}
         optimizedSchedules={currentStrat.machine_schedules}
-        title={`Gantt Dispatch: Baseline vs ${currentStrat.display_title}`}
+        title={hasBaselineComparison ? `Gantt Dispatch: Baseline vs ${currentStrat.display_title}` : `Gantt Dispatch: ${currentStrat.display_title}`}
       />
 
       {/* Plain Language Reasons Panel */}
       <ReasonPanel
         baselineSchedules={baseStrat.machine_schedules}
         optimizedSchedules={currentStrat.machine_schedules}
-        machineReasons={data.machine_reasons}
+        machineReasons={data.machine_reasons ?? {}}
       />
 
       {/* Printable Executive Summary Report */}
       <PrintableReport
-        siteName="Peenya Precision Engineering (Demo Unit)"
-        siteLocation="Peenya Industrial Area, Bengaluru, Karnataka, India"
+        siteName={siteLabel.split(" · ")[0]}
+        siteLocation={siteLabel.split(" · ").slice(1).join(" · ") || "Not provided"}
         baseline={baseStrat}
         optimized={currentStrat}
-        disclaimer={data.disclaimer}
+        disclaimer={data.disclaimer || ""}
       />
     </div>
   );

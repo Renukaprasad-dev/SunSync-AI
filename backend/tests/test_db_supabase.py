@@ -1,9 +1,10 @@
 
 import pytest
 import httpx
+from pathlib import Path
 
 from app.core.config import settings
-from app.core.db import DataRepository
+from app.core.db import DataRepository, DatabaseMigrationRequired, DatabaseUnavailable, SiteCreationLimitReached
 from app.models.domain import Machine
 
 
@@ -236,3 +237,82 @@ def test_supabase_site_write_failure_is_not_silently_accepted(
 
     with pytest.raises(RuntimeError, match="Supabase update_site failed"):
         repository.update_site(DEMO_SITE_ID, {"p_max_grid_kw": 20.0})
+
+
+def test_supabase_owned_site_limit_is_decided_by_atomic_rpc(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://mockproject.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "mock-service-key")
+    repository = DataRepository()
+    calls = []
+
+    def mock_post(url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        return httpx.Response(200, json={"limit_reached": True})
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+    owner = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+
+    stale = "2000-01-01T00:00:00+00:00"
+    with pytest.raises(SiteCreationLimitReached):
+        repository.create_owned_site(
+            {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "created_at": stale, "updated_at": stale},
+            owner,
+            max_sites=3,
+        )
+
+    assert len(calls) == 1
+    url, payload = calls[0]
+    assert url == "https://mockproject.supabase.co/rest/v1/rpc/create_owned_site_with_limit"
+    assert payload["p_site_data"]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert payload["p_site_data"]["owner_session_id"] == owner
+    assert payload["p_owner_session_id"] == owner
+    assert payload["p_max_sites"] == 3
+    assert payload["p_site_data"]["created_at"] != stale
+    assert payload["p_site_data"]["updated_at"] != stale
+
+
+def test_supabase_site_creation_sql_replaces_both_timestamps_with_now():
+    migration = Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "004_site_limits_and_session_cleanup.sql"
+    sql = migration.read_text(encoding="utf-8")
+    rpc_body = sql.split("CREATE OR REPLACE FUNCTION public.create_owned_site_with_limit", 1)[1].split("$$;", 1)[0]
+
+    assert "'created_at', to_jsonb(NOW())" in rpc_body
+    assert "'updated_at', to_jsonb(NOW())" in rpc_body
+    assert "p_site_data->'created_at'" not in rpc_body
+    assert "p_site_data->'updated_at'" not in rpc_body
+
+
+def test_supabase_rpc_404_raises_migration_required(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://mockproject.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "mock-service-key")
+    repository = DataRepository()
+
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: httpx.Response(404, json={"message": "function not found"}))
+
+    with pytest.raises(DatabaseMigrationRequired) as exc_info:
+        repository.create_owned_site(
+            {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+            "owner-1234-5678-9012-345678901234",
+            max_sites=3,
+        )
+    assert exc_info.value.rpc_name == "create_owned_site_with_limit"
+    assert "004_site_limits_and_session_cleanup.sql" in exc_info.value.migration_hint
+
+
+def test_supabase_rpc_network_error_raises_database_unavailable(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://mockproject.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "mock-service-key")
+    repository = DataRepository()
+
+    def mock_post_fail(*args, **kwargs):
+        raise httpx.ConnectError("Connection refused")
+
+    monkeypatch.setattr(httpx, "post", mock_post_fail)
+
+    with pytest.raises(DatabaseUnavailable) as exc_info:
+        repository.create_owned_site(
+            {"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+            "owner-1234-5678-9012-345678901234",
+            max_sites=3,
+        )
+    assert "ConnectError" in str(exc_info.value)

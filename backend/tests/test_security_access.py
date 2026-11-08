@@ -1,6 +1,10 @@
 import pytest
 from fastapi import HTTPException
 from app.core.security import RateLimiter, get_visitor_session_id
+from fastapi.testclient import TestClient
+from app.main import app
+
+client = TestClient(app)
 
 def test_rate_limiter_exceeded():
     limiter = RateLimiter(max_requests=5, window_seconds=60.0)
@@ -38,3 +42,13 @@ def test_visitor_session_uuid():
 
     req_fallback = DummyRequest({})
     assert len(get_visitor_session_id(req_fallback)) == 36 # Valid UUID format
+
+def test_base_load_endpoint_returns_solver_input_and_rejects_unknown_site():
+    demo_site_id = "00000000-0000-0000-0000-000000000001"
+    response = client.get(f"/sites/{demo_site_id}/base-load")
+    assert response.status_code == 200
+    assert len(response.json()) == 96
+    assert all(isinstance(value, (int, float)) for value in response.json())
+
+    missing = client.get("/sites/ffffffff-ffff-ffff-ffff-ffffffffffff/base-load")
+    assert missing.status_code == 404

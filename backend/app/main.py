@@ -6,15 +6,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.core.auth import validate_signing_secret
 from app.core.config import settings
 from app.core.db import repo
-from app.routers import sites, optimize, scenarios, forecast, billing
+from app.routers import sites, optimize, scenarios, forecast, billing, session
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("sunsync.api")
+
+# Startup configuration validation
+_secret_ok, _secret_msg = validate_signing_secret()
+if not _secret_ok:
+    logger.warning(f"Session security warning: {_secret_msg}")
 
 app = FastAPI(
     title="SunSync AI API",
@@ -26,12 +32,16 @@ app = FastAPI(
 
 # 1. Parse and build allowed origins list (guaranteeing local dev origins)
 allowed_origins_list: List[str] = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
-for dev_origin in ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]:
-    if dev_origin not in allowed_origins_list and "*" not in allowed_origins_list:
-        allowed_origins_list.append(dev_origin)
-
-has_wildcard = "*" in allowed_origins_list
-allow_creds = not has_wildcard
+is_vercel_runtime = bool(os.environ.get("VERCEL"))
+if "*" in allowed_origins_list:
+    raise RuntimeError("ALLOWED_ORIGINS must list explicit frontend origins; wildcard CORS is unsupported.")
+if is_vercel_runtime:
+    if not os.environ.get("ALLOWED_ORIGINS"):
+        raise RuntimeError("Set ALLOWED_ORIGINS to explicit frontend origins in Vercel.")
+else:
+    for dev_origin in ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]:
+        if dev_origin not in allowed_origins_list:
+            allowed_origins_list.append(dev_origin)
 
 # 2. Add Payload Size Limiting Middleware (Inner middleware)
 class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
@@ -53,8 +63,7 @@ app.add_middleware(LimitRequestSizeMiddleware)
 # Explicit custom headers used by frontend client
 CORS_ALLOW_HEADERS = [
     "Content-Type",
-    "X-Visitor-Session-Id",
-    "X-Visitor-Id",
+  "Authorization",
     "If-Match",
     "Authorization",
     "Accept",
@@ -67,7 +76,7 @@ CORS_ALLOW_HEADERS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins_list if allowed_origins_list else ["http://localhost:3000"],
-    allow_credentials=allow_creds,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allow_headers=CORS_ALLOW_HEADERS,
     expose_headers=["*"],
@@ -114,37 +123,8 @@ def health_check():
 
 # Include routers
 app.include_router(sites.router)
+app.include_router(session.router)
 app.include_router(optimize.router)
 app.include_router(scenarios.router)
 app.include_router(forecast.router)
 app.include_router(billing.router)
-
-
-# ---------------------------------------------------------------------------
-# /internal/cleanup — Vercel Cron endpoint (runs every 6 hours in production).
-# Protected by CRON_SECRET env var.  Vercel injects:
-#   Authorization: Bearer <CRON_SECRET>
-# A manual caller (e.g. curl) may also send the same header.
-# The demo site (DEMO_SITE_ID) is NEVER deleted by cleanup_expired_sandboxes().
-# ---------------------------------------------------------------------------
-@app.get("/internal/cleanup", tags=["Internal"])
-def cron_cleanup_sandboxes(request: Request):
-    cron_secret = os.environ.get("CRON_SECRET", "")
-    if not cron_secret:
-        raise HTTPException(
-            status_code=503,
-            detail="Sandbox cleanup endpoint is disabled: CRON_SECRET is not configured."
-        )
-
-    auth_header = request.headers.get("authorization", "")
-    expected = f"Bearer {cron_secret}"
-    if auth_header != expected:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized: invalid or missing Authorization header."
-        )
-
-    purged = repo.cleanup_expired_sandboxes(max_age_seconds=86400)  # 24 hours
-    logger.info(f"[cron/cleanup] Purged {purged} expired visitor sandbox(es).")
-    return {"status": "ok", "purged": purged}
-

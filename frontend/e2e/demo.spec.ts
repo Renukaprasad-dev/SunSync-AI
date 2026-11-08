@@ -1,5 +1,30 @@
 import { test, expect } from "@playwright/test";
 
+test("anonymous sessions are server-issued and isolate private sites and run history", async ({ request }) => {
+  const backend = "http://127.0.0.1:8000";
+  const issuedA = await request.post(`${backend}/auth/session`, { data: { sub: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } });
+  const issuedB = await request.post(`${backend}/auth/session`);
+  expect(issuedA.ok()).toBeTruthy();
+  expect(issuedB.ok()).toBeTruthy();
+  const sessionA = await issuedA.json();
+  const sessionB = await issuedB.json();
+  expect(sessionA.site_id).not.toBe(sessionB.site_id);
+
+  const privateReadA = await request.get(`${backend}/sites/${sessionA.site_id}/config`, {
+    headers: { Authorization: `Bearer ${sessionA.access_token}` },
+  });
+  const privateReadB = await request.get(`${backend}/sites/${sessionA.site_id}/config`, {
+    headers: { Authorization: `Bearer ${sessionB.access_token}` },
+  });
+  expect(privateReadA.status()).toBe(200);
+  expect(privateReadB.status()).toBe(404);
+
+  const forgedUnsigned = await request.get(`${backend}/sites/${sessionA.site_id}/config`, {
+    headers: { "X-Visitor-Id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+  });
+  expect(forgedUnsigned.status()).toBe(404);
+});
+
 test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
   test("1. Landing page displays problem, solution, strategies, and disclaimer", async ({ page }) => {
     await page.goto("/");
@@ -45,6 +70,253 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
     // Verify 'Why This Change' section
     await expect(page.locator("text=Why This Change?")).toBeVisible();
     await expect(page.locator("span", { hasText: "CNC Milling Center" }).first()).toBeVisible();
+  });
+
+  test("Dashboard shows backend errors and Retry Optimization sends a fresh request", async ({ page }) => {
+    let optimizationRequests = 0;
+    await page.route("**/optimize", async (route) => {
+      optimizationRequests++;
+      if (optimizationRequests === 1) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Backend temporarily unavailable" }) });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await page.goto("/dashboard");
+    await expect(page.getByText(/Backend temporarily unavailable/)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("button", { name: "Retry Optimization" })).toBeVisible();
+    await expect(page.getByText("Daily Electricity Cost")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Retry Optimization" }).click();
+    await expect(page.locator("span").filter({ hasText: "Daily Electricity Cost" }).first()).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(2);
+  });
+
+  test("Dashboard reuses a valid cache and ignores malformed cached JSON", async ({ page }) => {
+    let optimizationRequests = 0;
+    await page.route("**/optimize", async (route) => { optimizationRequests++; await route.continue(); });
+    await page.goto("/dashboard");
+    await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(1);
+    await page.reload();
+    await expect(page.getByText("Cached Simulation")).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(1);
+
+    await page.evaluate(() => {
+      const cacheKey = Object.keys(sessionStorage).find((key) => key.startsWith("sunsync_opt_v3_"));
+      if (cacheKey) sessionStorage.setItem(cacheKey, "{ malformed json");
+    });
+    await page.reload();
+    await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(2);
+  });
+
+  test("Dashboard does not cache failed optimization and tolerates throwing storage", async ({ page }) => {
+    await page.route("**/optimize", async (route) => {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Unavailable" }) });
+    });
+    await page.addInitScript(() => {
+      for (const method of ["getItem", "setItem", "removeItem", "clear", "key"]) {
+        Object.defineProperty(Storage.prototype, method, { configurable: true, value: () => { throw new Error("Storage unavailable"); } });
+      }
+      Object.defineProperty(Storage.prototype, "length", { configurable: true, get: () => { throw new Error("Storage unavailable"); } });
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto("/dashboard");
+    await expect(page.getByText(/Unavailable/)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Daily Electricity Cost")).toHaveCount(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("Dashboard invalidates cached optimization when site configuration version changes", async ({ page }) => {
+    let configRequests = 0;
+    let optimizationRequests = 0;
+    await page.route("**/sites/**/config", async (route) => {
+      configRequests++;
+      const response = await route.fetch();
+      const config = await response.json();
+      if (configRequests > 1) config.version = (config.version || 1) + 100;
+      await route.fulfill({ response, json: config });
+    });
+    await page.route("**/optimize", async (route) => { optimizationRequests++; await route.continue(); });
+    await page.goto("/dashboard");
+    await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+    await page.reload();
+    await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(2);
+  });
+
+  test("Dashboard invalidates cached optimization when the base load changes without a site version bump", async ({ page }) => {
+    let baseLoadRequests = 0;
+    let optimizationRequests = 0;
+    await page.route("**/base-load", async (route) => {
+      baseLoadRequests++;
+      const response = await route.fetch();
+      const load = await response.json();
+      if (baseLoadRequests > 1) load[0] += 0.25;
+      await route.fulfill({ response, json: load });
+    });
+    await page.route("**/optimize", async (route) => { optimizationRequests++; await route.continue(); });
+    await page.goto("/dashboard");
+    await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+    await page.reload();
+    await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(2);
+  });
+
+  const cacheInputCases = [
+    { name: "a solver-relevant site configuration field", input: "site" },
+    { name: "a machine configuration field", input: "machine" },
+    { name: "a tariff rate", input: "tariff" },
+    { name: "solar generation data", input: "solar" },
+  ] as const;
+
+  for (const cacheCase of cacheInputCases) {
+    test(`Dashboard invalidates cached optimization when ${cacheCase.name} changes without a version bump`, async ({ page }) => {
+      const siteId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      let configRequests = 0;
+      let solarRequests = 0;
+      let optimizationRequests = 0;
+      let mutationsApplied = 0;
+      const observedVersions: number[] = [];
+
+      await page.route("**/auth/session", async (route) => {
+        await route.fulfill({
+          json: {
+            access_token: "playwright-cache-test-token",
+            token_type: "bearer",
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+            site_id: siteId,
+          },
+        });
+      });
+
+      const baseConfig = {
+        site: {
+          id: siteId,
+          name: "Cache Test Site",
+          location: "Test Location",
+          p_max_grid_kw: 25,
+          solar_capacity_kw: 5,
+          currency: "INR",
+          grid_emission_factor_kg_per_kwh: 0.82,
+        },
+        machines: [{
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          name: "Test Machine",
+          power_kw: 4,
+          duration_intervals: 4,
+          earliest_start: 32,
+          latest_start: 40,
+          deadline_interval: 48,
+          flexible: true,
+        }],
+        tariff: { rates: Array(96).fill(5), demand_charge_rate_per_kw: 20, currency: "INR" },
+        version: 7,
+        storage_mode: "memory",
+        durable: false,
+      };
+
+      await page.route("**/sites/*/config", async (route) => {
+        configRequests++;
+        const config = {
+          ...baseConfig,
+          site: { ...baseConfig.site },
+          machines: baseConfig.machines.map((machine) => ({ ...machine })),
+          tariff: { ...baseConfig.tariff, rates: [...baseConfig.tariff.rates] },
+        };
+        if (configRequests > 1 && cacheCase.input === "site") {
+          config.site.p_max_grid_kw += 0.5;
+          mutationsApplied++;
+        } else if (configRequests > 1 && cacheCase.input === "machine") {
+          config.machines[0].power_kw += 0.5;
+          mutationsApplied++;
+        } else if (configRequests > 1 && cacheCase.input === "tariff") {
+          config.tariff.rates[0] += 0.5;
+          mutationsApplied++;
+        }
+        observedVersions.push(config.version);
+        await route.fulfill({ json: config });
+      });
+
+      await page.route("**/sites/*/solar*", async (route) => {
+        solarRequests++;
+        const solar = { scenario: "sunny", generation: Array(96).fill(0), capacity_kw: 5 };
+        if (solarRequests > 1 && cacheCase.input === "solar") {
+          solar.generation[40] += 0.5;
+          mutationsApplied++;
+        }
+        await route.fulfill({ json: solar });
+      });
+      await page.route("**/sites/*/base-load", async (route) => {
+        await route.fulfill({ json: Array(96).fill(1) });
+      });
+      await page.route("**/optimize", async (route) => {
+        optimizationRequests++;
+        const profile = Array(96).fill(0);
+        const strategy = {
+          status: "SUCCESS",
+          solver_duration_ms: 1,
+          machine_schedules: [],
+          load_profile: profile,
+          grid_profile: profile,
+          solar_profile: profile,
+          solar_used_profile: profile,
+          kpis: {
+            daily_cost_rs: 0,
+            peak_grid_demand_kw: 0,
+            solar_energy_used_kwh: 0,
+            grid_energy_imported_kwh: 0,
+            total_factory_energy_kwh: 0,
+            solar_self_consumption_pct: 0,
+            solar_coverage_pct: 0,
+            deadline_violations: 0,
+            estimated_co2_kg: 0,
+          },
+          reasons: [],
+          verifier_passed: true,
+        };
+        await route.fulfill({
+          json: {
+            site_id: siteId,
+            scenario: "sunny",
+            timestamp: "2026-11-02T00:00:00Z",
+            disclaimer: "Test fixture",
+            machine_reasons: {},
+            strategies: {
+              baseline: strategy,
+              solar_aware: strategy,
+              cost_optimized: strategy,
+            },
+          },
+        });
+      });
+
+      await page.goto("/dashboard");
+      await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+      expect(optimizationRequests).toBe(1);
+
+      await page.reload();
+      await expect(page.getByText("Optimization Completed")).toBeVisible({ timeout: 15000 });
+      expect(optimizationRequests).toBe(2);
+      expect(mutationsApplied).toBe(1);
+      expect(observedVersions).toEqual([7, 7]);
+    });
+  }
+
+  test("Failed historical replay stays an error and never starts a live optimization", async ({ page }) => {
+    let optimizationRequests = 0;
+    await page.route("**/runs/missing-run", async (route) => {
+      await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "Run not found" }) });
+    });
+    await page.route("**/optimize", async (route) => { optimizationRequests++; await route.continue(); });
+    await page.goto("/dashboard?reopened=true&runId=missing-run");
+    await expect(page.getByText(/Run not found/)).toBeVisible({ timeout: 15000 });
+    await page.getByRole("button", { name: "Retry Historical Replay" }).click();
+    await expect(page.getByText(/Run not found/)).toBeVisible({ timeout: 15000 });
+    expect(optimizationRequests).toBe(0);
   });
 
   test("3. Scenario Simulator tests Overcast Tariff Arbitrage", async ({ page }) => {
@@ -265,13 +537,23 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
 
     // Switch to Sunny first (initial state is overcast)
     const sunnyBtn = page.locator("button:has-text('1. Clear Sunny Day')");
+    const sunnyRequest = page.waitForRequest((req) => {
+      if (!req.url().includes("/scenarios/simulate") || req.method() !== "POST") return false;
+      try { return JSON.parse(req.postData() || "{}").scenario === "sunny"; } catch { return false; }
+    });
     await sunnyBtn.click();
+    await sunnyRequest;
     await expect(page.locator("text=Overcast Tariff Arbitrage Active")).not.toBeVisible();
     expect(lastScenarioRequested).toBe("sunny");
 
     // Switch to Overcast
     const overcastBtn = page.locator("button:has-text('3. Overcast / Monsoon Day')");
+    const overcastRequest = page.waitForRequest((req) => {
+      if (!req.url().includes("/scenarios/simulate") || req.method() !== "POST") return false;
+      try { return JSON.parse(req.postData() || "{}").scenario === "overcast"; } catch { return false; }
+    });
     await overcastBtn.click();
+    await overcastRequest;
     await expect(page.locator("text=Overcast Tariff Arbitrage Active")).toBeVisible({ timeout: 10000 });
     expect(lastScenarioRequested).toBe("overcast");
   });
@@ -366,7 +648,17 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
   });
 
   test("15. Run History lists past solver runs and reopens historical replay in Dashboard", async ({ page }) => {
-    // 1. Visit History page
+    const sessionResponse = await page.request.post("http://127.0.0.1:8000/auth/session");
+    expect(sessionResponse.ok()).toBeTruthy();
+    const session = await sessionResponse.json();
+    const optimizationResponse = await page.request.post("http://127.0.0.1:8000/optimize", {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+      data: { site_id: session.site_id, scenario: "sunny", strategies: ["baseline", "solar_aware", "cost_optimized"] },
+    });
+    expect(optimizationResponse.ok()).toBeTruthy();
+
+    // Put the same signed session into this browser before visiting history.
+    await page.addInitScript((token) => sessionStorage.setItem("sunsync_anonymous_session", token), session.access_token);
     await page.goto("/history");
     await expect(page.locator("text=Optimization Run History")).toBeVisible({ timeout: 15000 });
     await expect(page.locator("text=Logged Solver Runs")).toBeVisible({ timeout: 10000 });
@@ -390,7 +682,7 @@ test.describe("SunSync AI Industrial Decision Support Demo Flow", () => {
 
     // Verify replay banner exits and returns to live mode
     await expect(page.locator("text=Viewing Historical Replay")).not.toBeVisible({ timeout: 5000 });
-    await expect(page.locator("text=Live MILP Optimal")).toBeVisible();
+    await expect(page.locator("text=Optimization Completed")).toBeVisible();
   });
 
   test("16. Tariff editor edits Time-of-Day slabs, updates 96-interval preview chart, validates 24-hr continuity, and persists atomically", async ({ page }) => {

@@ -15,7 +15,9 @@ from app.models.domain import (
     SolarProfile
 )
 from app.core.db import repo
-from app.core.security import rate_limiter, get_visitor_session_id
+from app.core.security import rate_limiter
+from app.core.auth import AnonymousPrincipal, optional_principal
+from app.routers.sites import authorize_site
 from app.scheduler.service import SchedulerService
 
 router = APIRouter(prefix="", tags=["Optimization"])
@@ -33,13 +35,11 @@ class OptimizeEndpointPayload(BaseModel):
 
 @router.post("/optimize", response_model=OptimizationResponse)
 def run_optimization(payload: OptimizeEndpointPayload, request: Request = None):
-    if request:
-        rate_limiter.check(f"opt:{get_visitor_session_id(request)}")
+    principal = optional_principal(request) if request is not None else None
     site_id = payload.site_id
-    site = repo.get_site(site_id)
-    if not site:
-        site_id = "00000000-0000-0000-0000-000000000001"
-        site = repo.get_site(site_id)
+    site = authorize_site(site_id, principal)
+    limiter_key = principal.subject if principal else (request.client.host if request and request.client else "public")
+    rate_limiter.check(f"opt:{limiter_key}")
 
     # Use supplied objects or retrieve site defaults
     machines = payload.machines or repo.get_machines(site_id)
@@ -88,7 +88,7 @@ def run_optimization(payload: OptimizeEndpointPayload, request: Request = None):
         verifier_passed = all(s.verifier_passed for s in response.strategies.values()) if response.strategies else True
         status_str = "SUCCESS" if verifier_passed else "INFEASIBLE"
 
-        visitor_id = get_visitor_session_id(request) if request else "anon"
+        visitor_id = principal.subject if principal else None
         run_record = {
             "id": run_id,
             "site_id": site_id,
@@ -120,14 +120,19 @@ def run_optimization(payload: OptimizeEndpointPayload, request: Request = None):
 @router.get("/runs", response_model=List[OptimizationRunSummary])
 @router.get("/optimization/runs", response_model=List[OptimizationRunSummary])
 def list_runs(site_id: Optional[str] = None, request: Request = None):
-    visitor_id = get_visitor_session_id(request) if request else None
+    principal = optional_principal(request) if request is not None else None
+    visitor_id = principal.subject if principal else None
+    if site_id:
+        authorize_site(site_id, principal)
     return repo.list_optimization_runs(site_id=site_id, visitor_id=visitor_id)
 
 @router.get("/runs/{run_id}", response_model=OptimizationRunDetail)
 @router.get("/optimization/runs/{run_id}", response_model=OptimizationRunDetail)
 def get_run(run_id: str, request: Request = None):
-    visitor_id = get_visitor_session_id(request) if request else None
+    principal = optional_principal(request) if request is not None else None
+    visitor_id = principal.subject if principal else None
     run = repo.get_optimization_run(run_id=run_id, visitor_id=visitor_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"Optimization run {run_id} not found.")
+    authorize_site(run["site_id"], principal)
     return run

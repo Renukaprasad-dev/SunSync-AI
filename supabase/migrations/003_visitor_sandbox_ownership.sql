@@ -9,10 +9,12 @@ ALTER TABLE public.sites
 CREATE INDEX IF NOT EXISTS idx_sites_owner_session_id
     ON public.sites (owner_session_id);
 
--- 3. Procedure to prune expired visitor sandboxes older than TTL (default 24 hours)
+-- 3. Procedure to prune stale visitor sandboxes. SQL cannot validate signed
+-- bearer tokens, so retain sites for at least the maximum supported session
+-- lifetime (30 days) plus a one-day grace. Session renewal refreshes updated_at.
 -- CRITICAL SAFETY: Never prunes demo site (id = '00000000-0000-0000-0000-000000000001' or owner_session_id IS NULL).
 CREATE OR REPLACE FUNCTION public.cleanup_expired_visitor_sandboxes(
-    p_max_age_interval INTERVAL DEFAULT INTERVAL '24 hours'
+    p_max_age_interval INTERVAL DEFAULT INTERVAL '31 days'
 )
 RETURNS INTEGER
 LANGUAGE plpgsql
@@ -25,7 +27,7 @@ BEGIN
     DELETE FROM public.sites
      WHERE owner_session_id IS NOT NULL
        AND id <> '00000000-0000-0000-0000-000000000001'::UUID
-       AND updated_at < (NOW() - p_max_age_interval);
+       AND updated_at < (NOW() - GREATEST(p_max_age_interval, INTERVAL '31 days'));
 
     GET DIAGNOSTICS v_purged = ROW_COUNT;
     RETURN v_purged;

@@ -42,7 +42,9 @@ def test_memory_mode_on_vercel(monkeypatch):
     repo.update_site("00000000-0000-0000-0000-000000000001", {"p_max_grid_kw": 18.0})
     assert repo.get_site("00000000-0000-0000-0000-000000000001")["p_max_grid_kw"] == 18.0
 
-def test_simulated_read_only_filesystem(monkeypatch):
+def test_simulated_read_only_filesystem(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.core.db.LOCAL_STORE_PATH", tmp_path / "isolated-store.json")
+    monkeypatch.setattr("app.core.db.LOCAL_DATA_DIR", tmp_path)
     repo = DataRepository(storage_mode="local_file")
 
     def mock_replace(self, target):

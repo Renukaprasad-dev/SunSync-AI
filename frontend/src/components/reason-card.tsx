@@ -7,18 +7,19 @@ import { MachineScheduleResult } from "@/lib/types";
 interface ReasonPanelProps {
   baselineSchedules: MachineScheduleResult[];
   optimizedSchedules: MachineScheduleResult[];
-  machineReasons: Record<string, string>;
+  machineReasons?: Record<string, string> | null;
 }
 
 export function ReasonPanel({
-  baselineSchedules,
-  optimizedSchedules,
-  machineReasons
+  baselineSchedules = [],
+  optimizedSchedules = [],
+  machineReasons = {}
 }: ReasonPanelProps) {
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
-  const baseMap = new Map(baselineSchedules.map((m) => [m.machine_id, m]));
+  const safeReasons = machineReasons ?? {};
+  const baseMap = new Map((baselineSchedules || []).map((m) => [m.machine_id, m]));
 
-  const shiftedCount = optimizedSchedules.filter((opt) => {
+  const shiftedCount = (optimizedSchedules || []).filter((opt) => {
     const base = baseMap.get(opt.machine_id);
     return base && base.start_slot !== opt.start_slot;
   }).length;
@@ -73,7 +74,7 @@ export function ReasonPanel({
           {optimizedSchedules.map((opt) => {
             const base = baseMap.get(opt.machine_id);
             const wasMoved = base && base.start_slot !== opt.start_slot;
-            const reasonText = opt.reason || machineReasons[opt.machine_id] || "Schedule maintained within limits.";
+            const reasonText = opt.reason || safeReasons[opt.machine_id] || machineReasons?.[opt.machine_id] || "Schedule maintained within limits.";
 
             return (
               <div

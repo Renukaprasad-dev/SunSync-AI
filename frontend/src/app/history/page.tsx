@@ -51,15 +51,6 @@ export default function HistoryPage() {
     setOpeningId(runId);
     try {
       const fullRun = await getOptimizationRun(runId);
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("sunsync_reopened_run", JSON.stringify(fullRun.results));
-        sessionStorage.setItem("sunsync_reopened_meta", JSON.stringify({
-          id: fullRun.id,
-          created_at: fullRun.created_at,
-          scenario: fullRun.scenario,
-          solver_name: fullRun.solver_name
-        }));
-      }
       router.push(`/dashboard?reopened=true&runId=${encodeURIComponent(runId)}`);
     } catch (err: any) {
       alert(`Could not load run details: ${err?.message || "Network error"}`);

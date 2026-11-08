@@ -8,21 +8,21 @@ from app.models.domain import (
     BillComparisonMetric
 )
 from app.core.db import repo
-from app.core.security import rate_limiter, get_visitor_session_id
+from app.core.security import rate_limiter
+from app.core.auth import optional_principal
+from app.routers.sites import authorize_site
 
 router = APIRouter(prefix="/billing", tags=["Billing Reality Check"])
 
 @router.post("/reality-check", response_model=BillRealityCheckResponse)
 def compute_bill_reality_check(payload: BillRealityCheckRequest, request: Request = None):
-    if request:
-        rate_limiter.check(f"bill:{get_visitor_session_id(request)}")
+    principal = optional_principal(request) if request is not None else None
+    limiter_key = principal.subject if principal else (request.client.host if request and request.client else "public")
+    rate_limiter.check(f"bill:{limiter_key}")
 
     # Retrieve site resources
     site_id = payload.site_id
-    site = repo.get_site(site_id)
-    if not site:
-        site_id = repo.DEMO_SITE_ID
-        site = repo.get_site(site_id)
+    site = authorize_site(site_id, principal)
 
     machines = repo.get_machines(site_id)
     tariff = repo.get_tariff(site_id)

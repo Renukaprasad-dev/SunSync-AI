@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
@@ -14,6 +15,11 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     STORAGE_MODE: str = "" # Optional override: "supabase", "local_file", "memory"
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    SESSION_SIGNING_SECRET: str = ""
+    SESSION_TOKEN_TTL_SECONDS: int = 604800
+    SESSION_ISSUANCE_MAX_REQUESTS: int = 10
+    # Includes the initial visitor workspace created with the anonymous session.
+    SITE_CREATION_LIMIT_PER_SESSION: int = Field(default=3, ge=1, le=100)
 
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
