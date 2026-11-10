@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, build_allowed_origins
 
 client = TestClient(app)
 
@@ -152,3 +152,155 @@ def test_cors_headers_present_on_error_responses(monkeypatch):
         json={"scenario": "sunny"}
     )
     assert resp_500_untrusted.headers.get("access-control-allow-origin") != untrusted_origin
+
+
+def test_build_allowed_origins_existing_only():
+    # In Vercel mode, returns exactly the base origins
+    res_vercel = build_allowed_origins(
+        allowed_origins_raw="https://sunsync-frontend.vercel.app",
+        preview_allowed_origins_raw="",
+        is_vercel=True,
+    )
+    assert res_vercel == ["https://sunsync-frontend.vercel.app"]
+
+    # In local development mode, includes local dev origins
+    res_local = build_allowed_origins(
+        allowed_origins_raw="http://localhost:3000",
+        preview_allowed_origins_raw="",
+        is_vercel=False,
+    )
+    assert "http://localhost:3000" in res_local
+    assert "http://127.0.0.1:3000" in res_local
+    assert "http://[::1]:3000" in res_local
+
+
+def test_build_allowed_origins_additional_preview_origins():
+    # Merges base and preview origins
+    res = build_allowed_origins(
+        allowed_origins_raw="https://sunsync-frontend.vercel.app",
+        preview_allowed_origins_raw="https://sunsync-frontend-git-phase-3-user.vercel.app, https://preview-alt.vercel.app",
+        is_vercel=True,
+    )
+    assert res == [
+        "https://sunsync-frontend.vercel.app",
+        "https://sunsync-frontend-git-phase-3-user.vercel.app",
+        "https://preview-alt.vercel.app",
+    ]
+
+
+def test_build_allowed_origins_deduplication():
+    # Deduplicates origins across base and preview without altering order
+    res = build_allowed_origins(
+        allowed_origins_raw="https://sunsync-frontend.vercel.app, https://sunsync-frontend.vercel.app",
+        preview_allowed_origins_raw="https://sunsync-frontend.vercel.app, https://preview.vercel.app, https://preview.vercel.app",
+        is_vercel=True,
+    )
+    assert res == [
+        "https://sunsync-frontend.vercel.app",
+        "https://preview.vercel.app",
+    ]
+
+
+def test_build_allowed_origins_empty_and_whitespace():
+    # Handles empty strings, None, and whitespace-only items cleanly
+    res_empty_preview = build_allowed_origins(
+        allowed_origins_raw="https://sunsync-frontend.vercel.app",
+        preview_allowed_origins_raw="   ,  ,  ",
+        is_vercel=True,
+    )
+    assert res_empty_preview == ["https://sunsync-frontend.vercel.app"]
+
+    res_none_preview = build_allowed_origins(
+        allowed_origins_raw="https://sunsync-frontend.vercel.app",
+        preview_allowed_origins_raw=None,
+        is_vercel=True,
+    )
+    assert res_none_preview == ["https://sunsync-frontend.vercel.app"]
+
+
+def test_build_allowed_origins_wildcard_rejection():
+    # Wildcards must be strictly rejected
+    with pytest.raises(RuntimeError, match="wildcard CORS"):
+        build_allowed_origins(allowed_origins_raw="*", is_vercel=True)
+
+    with pytest.raises(RuntimeError, match="wildcard CORS"):
+        build_allowed_origins(
+            allowed_origins_raw="https://sunsync-frontend.vercel.app",
+            preview_allowed_origins_raw="*",
+            is_vercel=True,
+        )
+
+    with pytest.raises(RuntimeError, match="wildcard CORS"):
+        build_allowed_origins(
+            allowed_origins_raw="https://sunsync-frontend.vercel.app",
+            preview_allowed_origins_raw="https://*.vercel.app",
+            is_vercel=True,
+        )
+
+
+def test_build_allowed_origins_vercel_requires_base_allowed_origins():
+    # In Vercel runtime, base ALLOWED_ORIGINS cannot be empty
+    with pytest.raises(RuntimeError, match="Set ALLOWED_ORIGINS to explicit frontend origins in Vercel"):
+        build_allowed_origins(allowed_origins_raw="", is_vercel=True)
+
+    with pytest.raises(RuntimeError, match="Set ALLOWED_ORIGINS to explicit frontend origins in Vercel"):
+        build_allowed_origins(allowed_origins_raw="   ", is_vercel=True)
+
+
+def test_cors_preflight_with_preview_allowed_origins():
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from app.main import CORS_ALLOW_HEADERS
+
+    test_app = FastAPI()
+    test_origins = build_allowed_origins(
+        allowed_origins_raw="https://sunsync-frontend.vercel.app",
+        preview_allowed_origins_raw="https://sunsync-frontend-git-phase-3-preview.vercel.app",
+        is_vercel=True,
+    )
+
+    test_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=test_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=CORS_ALLOW_HEADERS,
+    )
+
+    @test_app.get("/test-endpoint")
+    def sample():
+        return {"ok": True}
+
+    test_client = TestClient(test_app)
+
+    # 1. Base origin preflight
+    resp_base = test_client.options(
+        "/test-endpoint",
+        headers={
+            "Origin": "https://sunsync-frontend.vercel.app",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp_base.status_code == 200
+    assert resp_base.headers.get("access-control-allow-origin") == "https://sunsync-frontend.vercel.app"
+
+    # 2. Preview origin preflight
+    resp_preview = test_client.options(
+        "/test-endpoint",
+        headers={
+            "Origin": "https://sunsync-frontend-git-phase-3-preview.vercel.app",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp_preview.status_code == 200
+    assert resp_preview.headers.get("access-control-allow-origin") == "https://sunsync-frontend-git-phase-3-preview.vercel.app"
+
+    # 3. Untrusted origin rejected
+    resp_untrusted = test_client.options(
+        "/test-endpoint",
+        headers={
+            "Origin": "https://attacker.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp_untrusted.headers.get("access-control-allow-origin") != "https://attacker.com"

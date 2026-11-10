@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List
+from typing import List, Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -30,18 +30,66 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+def build_allowed_origins(
+    allowed_origins_raw: Optional[str] = None,
+    preview_allowed_origins_raw: Optional[str] = None,
+    is_vercel: Optional[bool] = None,
+) -> List[str]:
+    """Parse, merge, validate, and deduplicate explicit CORS allowed origins.
+
+    - allowed_origins_raw: base origins string (defaults to settings.ALLOWED_ORIGINS).
+    - preview_allowed_origins_raw: optional preview origins string (defaults to settings.PREVIEW_ALLOWED_ORIGINS).
+    - is_vercel: whether running in Vercel runtime (defaults to bool(os.environ.get("VERCEL"))).
+    """
+    if allowed_origins_raw is None:
+        allowed_origins_raw = settings.ALLOWED_ORIGINS
+    if preview_allowed_origins_raw is None:
+        preview_allowed_origins_raw = getattr(settings, "PREVIEW_ALLOWED_ORIGINS", "")
+    if is_vercel is None:
+        is_vercel = bool(os.environ.get("VERCEL"))
+
+    # Parse base origins
+    base_origins: List[str] = [
+        o.strip() for o in (allowed_origins_raw or "").split(",") if o.strip()
+    ]
+
+    # Parse preview origins
+    preview_origins: List[str] = [
+        o.strip() for o in (preview_allowed_origins_raw or "").split(",") if o.strip()
+    ]
+
+    # Enforce strict prohibition on wildcard origins (both '*' and wildcard subdomains)
+    all_raw_origins = base_origins + preview_origins
+    for origin in all_raw_origins:
+        if "*" in origin:
+            raise RuntimeError(
+                f"CORS origins must list explicit frontend origins; wildcard CORS ('{origin}') is unsupported."
+            )
+
+    # In Vercel runtime, base ALLOWED_ORIGINS must be set
+    if is_vercel:
+        check_val = os.environ.get("ALLOWED_ORIGINS") if allowed_origins_raw is None else allowed_origins_raw
+        if not (check_val and check_val.strip()):
+            raise RuntimeError("Set ALLOWED_ORIGINS to explicit frontend origins in Vercel.")
+
+    # Merge while preserving order and eliminating duplicates
+    merged_origins: List[str] = []
+    for origin in all_raw_origins:
+        if origin not in merged_origins:
+            merged_origins.append(origin)
+
+    # Local development fallbacks when not running in Vercel
+    if not is_vercel:
+        dev_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]
+        for dev_origin in dev_origins:
+            if dev_origin not in merged_origins:
+                merged_origins.append(dev_origin)
+
+    return merged_origins
+
+
 # 1. Parse and build allowed origins list (guaranteeing local dev origins)
-allowed_origins_list: List[str] = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
-is_vercel_runtime = bool(os.environ.get("VERCEL"))
-if "*" in allowed_origins_list:
-    raise RuntimeError("ALLOWED_ORIGINS must list explicit frontend origins; wildcard CORS is unsupported.")
-if is_vercel_runtime:
-    if not os.environ.get("ALLOWED_ORIGINS"):
-        raise RuntimeError("Set ALLOWED_ORIGINS to explicit frontend origins in Vercel.")
-else:
-    for dev_origin in ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]:
-        if dev_origin not in allowed_origins_list:
-            allowed_origins_list.append(dev_origin)
+allowed_origins_list: List[str] = build_allowed_origins()
 
 # 2. Add Payload Size Limiting Middleware (Inner middleware)
 class LimitRequestSizeMiddleware(BaseHTTPMiddleware):

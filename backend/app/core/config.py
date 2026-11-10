@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     STORAGE_MODE: str = "" # Optional override: "supabase", "local_file", "memory"
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    PREVIEW_ALLOWED_ORIGINS: str = ""
     SESSION_SIGNING_SECRET: str = ""
     SESSION_TOKEN_TTL_SECONDS: int = 604800
     SESSION_ISSUANCE_MAX_REQUESTS: int = 10
